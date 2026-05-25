@@ -1,74 +1,82 @@
 import { useEffect, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Platform, StyleSheet, Text, View } from 'react-native';
 
 import { Image } from 'expo-image';
-import { Asset } from 'expo-media-library';
+import { Asset, MediaType } from 'expo-media-library';
+import { VideoView, useVideoPlayer } from 'expo-video';
 
+import { useAssetMetadata, usePlaybackUri } from '@/hooks/use-asset-metadata';
 import { useReverseGeocode } from '@/hooks/use-reverse-geocode';
 import { formatTimeAgo } from '@/utils/time-ago';
 
-type CardData = {
-  uri: string;
-  creationTime: number | null;
-  location: { latitude: number; longitude: number } | null;
-};
-
-const dataCache = new Map<string, CardData>();
+const PLACE_TIMEOUT_MS = 1500;
 
 export function FeedCard({
   asset,
+  isCurrent,
   width,
   height,
 }: {
   asset: Asset;
+  isCurrent: boolean;
   width: number;
   height: number;
 }) {
-  const [data, setData] = useState<CardData | null>(() => dataCache.get(asset.id) ?? null);
+  const meta = useAssetMetadata(asset);
+  const placeName = useReverseGeocode(meta?.location ?? null);
+  const isVideo = meta?.mediaType === MediaType.VIDEO;
+  const playbackUri = usePlaybackUri(isVideo && isCurrent ? asset : null);
+  const thumbnailUri = Platform.OS === 'ios' ? asset.id : meta?.uri;
 
+  const [placeTimedOut, setPlaceTimedOut] = useState(false);
   useEffect(() => {
-    if (data) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const [info, location] = await Promise.all([
-          asset.getInfo(),
-          asset.getLocation().catch(() => null),
-        ]);
-        const next: CardData = {
-          uri: info.uri,
-          creationTime: info.creationTime,
-          location,
-        };
-        dataCache.set(asset.id, next);
-        if (!cancelled) setData(next);
-      } catch {
-        // asset disappeared; leave card blank
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [asset, data]);
+    setPlaceTimedOut(false);
+    if (!meta?.location || placeName) return;
+    const t = setTimeout(() => setPlaceTimedOut(true), PLACE_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [meta?.location, placeName]);
 
-  const placeName = useReverseGeocode(data?.location ?? null);
+  const overlayReady =
+    meta != null && (meta.location == null || placeName != null || placeTimedOut);
 
   return (
     <View style={[styles.container, { width, height }]}>
-      {data ? (
+      {thumbnailUri ? (
         <Image
-          source={{ uri: data.uri }}
+          source={{ uri: thumbnailUri }}
           style={StyleSheet.absoluteFill}
-          contentFit="cover"
-          transition={200}
+          contentFit="contain"
+          cachePolicy="memory-disk"
+          transition={0}
+          recyclingKey={asset.id}
         />
       ) : null}
+      {isVideo && isCurrent && playbackUri ? <FeedVideo uri={playbackUri} /> : null}
       <View style={styles.gradient} pointerEvents="none" />
-      <View style={styles.overlay}>
-        <Text style={styles.timeAgo}>{formatTimeAgo(data?.creationTime ?? null)}</Text>
-        {placeName ? <Text style={styles.place}>{placeName}</Text> : null}
-      </View>
+      {overlayReady ? (
+        <View style={styles.overlay}>
+          <Text style={styles.timeAgo}>{formatTimeAgo(meta.creationTime)}</Text>
+          {placeName ? <Text style={styles.place}>{placeName}</Text> : null}
+        </View>
+      ) : null}
     </View>
+  );
+}
+
+function FeedVideo({ uri }: { uri: string }) {
+  const player = useVideoPlayer(uri, (p) => {
+    p.loop = true;
+    p.muted = true;
+    p.play();
+  });
+
+  return (
+    <VideoView
+      player={player}
+      style={StyleSheet.absoluteFill}
+      contentFit="contain"
+      nativeControls={false}
+    />
   );
 }
 
