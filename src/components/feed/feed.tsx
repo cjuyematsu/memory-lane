@@ -1,50 +1,143 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
   View,
   useWindowDimensions,
+  type ViewToken,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { Image } from 'expo-image';
 import { Asset, usePermissions } from 'expo-media-library';
 
 import { FeedCard } from '@/components/feed/feed-card';
 import { Colors } from '@/constants/theme';
 import { useAssetFeed } from '@/hooks/use-asset-feed';
 
+let rememberedAssetId: string | null = null;
+const LOOP_PAD = 3;
+
 export function Feed() {
   const [permission, requestPermission] = usePermissions();
   const granted = !!permission?.granted;
   const { state, reload } = useAssetFeed(granted);
-  const { width, height } = useWindowDimensions();
+  const window = useWindowDimensions();
 
+  const [layout, setLayout] = useState({ width: window.width, height: window.height });
   const [entryIndex, setEntryIndex] = useState<number | null>(null);
+  const [currentId, setCurrentId] = useState<string | null>(null);
   const listRef = useRef<FlatList<Asset>>(null);
 
+  const assets = state.status === 'ready' ? state.assets : [];
+  const canLoop = assets.length >= LOOP_PAD + 1;
+
+  const data = useMemo(() => {
+    if (!canLoop) return assets;
+    return [
+      ...assets.slice(-LOOP_PAD),
+      ...assets,
+      ...assets.slice(0, LOOP_PAD),
+    ];
+  }, [assets, canLoop]);
+
+  const prefetchAround = useCallback(
+    (idx: number) => {
+      if (Platform.OS !== 'ios') return;
+      const uris: string[] = [];
+      for (const d of [-2, -1, 1, 2, 3]) {
+        const a = assets[idx + d];
+        if (a) uris.push(a.id);
+      }
+      if (uris.length > 0) Image.prefetch(uris).catch(() => {});
+    },
+    [assets]
+  );
+
   useEffect(() => {
-    if (state.status === 'ready' && entryIndex === null && state.assets.length > 0) {
-      setEntryIndex(Math.floor(Math.random() * state.assets.length));
+    if (state.status === 'ready' && entryIndex === null && assets.length > 0) {
+      let chosenIdx: number;
+      if (rememberedAssetId) {
+        const idx = assets.findIndex((a) => a.id === rememberedAssetId);
+        if (idx >= 0) {
+          setEntryIndex(idx);
+          setCurrentId(rememberedAssetId);
+          if (Platform.OS === 'ios') Image.prefetch(rememberedAssetId).catch(() => {});
+          prefetchAround(idx);
+          return;
+        }
+      }
+      chosenIdx = Math.floor(Math.random() * assets.length);
+      setEntryIndex(chosenIdx);
+      setCurrentId(assets[chosenIdx].id);
+      rememberedAssetId = assets[chosenIdx].id;
+      if (Platform.OS === 'ios') Image.prefetch(assets[chosenIdx].id).catch(() => {});
+      prefetchAround(chosenIdx);
     }
-  }, [state, entryIndex]);
+  }, [state, entryIndex, assets, prefetchAround]);
+
+  useEffect(() => {
+    if (currentId) rememberedAssetId = currentId;
+  }, [currentId]);
 
   const shuffle = useCallback(() => {
-    if (state.status !== 'ready' || state.assets.length === 0) return;
-    const next = Math.floor(Math.random() * state.assets.length);
+    if (assets.length === 0) return;
+    const next = Math.floor(Math.random() * assets.length);
     setEntryIndex(next);
-    listRef.current?.scrollToIndex({ index: next, animated: false });
-  }, [state]);
+    setCurrentId(assets[next].id);
+    prefetchAround(next);
+    listRef.current?.scrollToIndex({
+      index: canLoop ? next + LOOP_PAD : next,
+      animated: false,
+    });
+  }, [assets, canLoop, prefetchAround]);
+
+  useEffect(() => {
+    if (!currentId || assets.length === 0) return;
+    const idx = assets.findIndex((a) => a.id === currentId);
+    if (idx >= 0) prefetchAround(idx);
+  }, [currentId, assets, prefetchAround]);
 
   const getItemLayout = useCallback(
     (_: ArrayLike<Asset> | null | undefined, index: number) => ({
-      length: height,
-      offset: height * index,
+      length: layout.height,
+      offset: layout.height * index,
       index,
     }),
-    [height]
+    [layout.height]
+  );
+
+  const onViewableItemsChanged = useRef(
+    ({ viewableItems }: { viewableItems: ViewToken<Asset>[] }) => {
+      const first = viewableItems[0];
+      if (first?.item) {
+        setCurrentId(first.item.id);
+      }
+    }
+  ).current;
+
+  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 60 }).current;
+
+  const onMomentumScrollEnd = useCallback(
+    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+      if (!canLoop || layout.height <= 0) return;
+      const y = e.nativeEvent.contentOffset.y;
+      const idx = Math.round(y / layout.height);
+      if (idx < LOOP_PAD) {
+        const real = idx + assets.length;
+        listRef.current?.scrollToOffset({ offset: real * layout.height, animated: false });
+      } else if (idx >= LOOP_PAD + assets.length) {
+        const real = idx - assets.length;
+        listRef.current?.scrollToOffset({ offset: real * layout.height, animated: false });
+      }
+    },
+    [canLoop, layout.height, assets.length]
   );
 
   if (!permission) {
@@ -79,7 +172,7 @@ export function Feed() {
     return (
       <SafeAreaView style={styles.center}>
         <Text style={styles.body}>{state.message}</Text>
-        <Pressable style={styles.button} onPress={reload}>
+        <Pressable style={styles.button} onPress={() => reload()}>
           <Text style={styles.buttonLabel}>Retry</Text>
         </Pressable>
       </SafeAreaView>
@@ -103,21 +196,47 @@ export function Feed() {
   }
 
   return (
-    <View style={styles.container}>
+    <View
+      style={styles.container}
+      onLayout={(e) => {
+        const next = e.nativeEvent.layout;
+        if (next.height !== layout.height || next.width !== layout.width) {
+          setLayout({ width: next.width, height: next.height });
+        }
+      }}>
       <FlatList
         ref={listRef}
-        data={state.assets}
-        keyExtractor={(a) => a.id}
-        renderItem={({ item }) => <FeedCard asset={item} width={width} height={height} />}
+        data={data}
+        keyExtractor={(item, index) => {
+          if (!canLoop) return item.id;
+          if (index < LOOP_PAD) return `pre-${item.id}-${index}`;
+          if (index >= LOOP_PAD + assets.length) return `post-${item.id}-${index}`;
+          return item.id;
+        }}
+        renderItem={({ item }) => (
+          <FeedCard
+            asset={item}
+            isCurrent={item.id === currentId}
+            width={layout.width}
+            height={layout.height}
+          />
+        )}
         pagingEnabled
+        snapToInterval={layout.height}
+        snapToAlignment="start"
+        disableIntervalMomentum
         showsVerticalScrollIndicator={false}
-        initialScrollIndex={entryIndex}
+        initialScrollIndex={canLoop ? entryIndex + LOOP_PAD : entryIndex}
         getItemLayout={getItemLayout}
         decelerationRate="fast"
         windowSize={5}
         initialNumToRender={3}
         maxToRenderPerBatch={3}
         removeClippedSubviews
+        onViewableItemsChanged={onViewableItemsChanged}
+        viewabilityConfig={viewabilityConfig}
+        onMomentumScrollEnd={onMomentumScrollEnd}
+        extraData={currentId}
       />
       <SafeAreaView style={styles.shuffleWrapper} pointerEvents="box-none">
         <Pressable style={styles.shuffle} onPress={shuffle}>
