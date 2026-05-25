@@ -1,5 +1,5 @@
-import { Feed } from '@/components/feed/feed';
+import { TopTabs } from '@/components/top-tabs';
 
-export default function FeedScreen() {
-  return <Feed />;
+export default function Home() {
+  return <TopTabs />;
 }
