@@ -1,0 +1,120 @@
+diff --git a/node_modules/expo-media-library/android/src/main/java/expo/modules/medialibrary/next/objects/asset/delegates/AssetLegacyDelegate.kt b/node_modules/expo-media-library/android/src/main/java/expo/modules/medialibrary/next/objects/asset/delegates/AssetLegacyDelegate.kt
+index 2976506..a2c0ee7 100644
+--- a/node_modules/expo-media-library/android/src/main/java/expo/modules/medialibrary/next/objects/asset/delegates/AssetLegacyDelegate.kt
++++ b/node_modules/expo-media-library/android/src/main/java/expo/modules/medialibrary/next/objects/asset/delegates/AssetLegacyDelegate.kt
+@@ -1,6 +1,7 @@
+ package expo.modules.medialibrary.next.objects.asset.delegates
+ 
+ import android.content.Context
++import android.media.MediaMetadataRetriever
+ import android.net.Uri
+ import android.os.Build
+ import android.os.Bundle
+@@ -165,15 +166,39 @@ class AssetLegacyDelegate(
+     return listOf(Album(albumId, assetDeleter, assetFactory, assetMover, contextRef.getOrThrow()))
+   }
+ 
+-  override suspend fun getLocation(): Location? {
++  override suspend fun getLocation(): Location? = withContext(Dispatchers.IO) {
+     systemPermissionsDelegate.requireReadPermissions()
+-    return contentResolver.openInputStream(contentUri)?.use { stream ->
++    if (getMediaType() == MediaType.VIDEO) {
++      return@withContext extractVideoLocation()
++    }
++    contentResolver.openInputStream(contentUri)?.use { stream ->
+       ExifInterface(stream)
+         .latLong
+         ?.let { (lat, long) -> Location(lat, long) }
+     }
+   }
+ 
++  private fun extractVideoLocation(): Location? {
++    val retriever = MediaMetadataRetriever()
++    return try {
++      retriever.setDataSource(contextRef.getOrThrow(), contentUri)
++      val iso = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_LOCATION)
++        ?: return null
++      parseIso6709Location(iso)
++    } catch (_: Exception) {
++      null
++    } finally {
++      retriever.release()
++    }
++  }
++
++  private fun parseIso6709Location(iso: String): Location? {
++    val match = Regex("([+-]\\d+(?:\\.\\d+)?)([+-]\\d+(?:\\.\\d+)?)").find(iso) ?: return null
++    val lat = match.groupValues[1].toDoubleOrNull() ?: return null
++    val lon = match.groupValues[2].toDoubleOrNull() ?: return null
++    return Location(lat, lon)
++  }
++
+   override suspend fun getExif(): Bundle = withContext(Dispatchers.IO) {
+     systemPermissionsDelegate.requireReadPermissions()
+     if (getMediaType() != MediaType.IMAGE) {
+diff --git a/node_modules/expo-media-library/android/src/main/java/expo/modules/medialibrary/next/objects/asset/delegates/AssetModernDelegate.kt b/node_modules/expo-media-library/android/src/main/java/expo/modules/medialibrary/next/objects/asset/delegates/AssetModernDelegate.kt
+index f2b90c1..6c9ec99 100644
+--- a/node_modules/expo-media-library/android/src/main/java/expo/modules/medialibrary/next/objects/asset/delegates/AssetModernDelegate.kt
++++ b/node_modules/expo-media-library/android/src/main/java/expo/modules/medialibrary/next/objects/asset/delegates/AssetModernDelegate.kt
+@@ -2,6 +2,7 @@ package expo.modules.medialibrary.next.objects.asset.delegates
+ 
+ import android.content.ContentValues
+ import android.content.Context
++import android.media.MediaMetadataRetriever
+ import androidx.exifinterface.media.ExifInterface
+ import android.net.Uri
+ import android.os.Build
+@@ -169,12 +170,51 @@ class AssetModernDelegate(
+     return listOf(Album(albumId, assetDeleter, assetFactory, assetMover, contextRef.getOrThrow()))
+   }
+ 
+-  override suspend fun getLocation(): Location? =
+-    contentResolver.openInputStream(contentUri)?.use { stream ->
++  override suspend fun getLocation(): Location? = withContext(Dispatchers.IO) {
++    if (getMediaType() == MediaType.VIDEO) {
++      return@withContext extractVideoLocation()
++    }
++    val originalUri = unredactedUri()
++    contentResolver.openInputStream(originalUri)?.use { stream ->
+       ExifInterface(stream)
+         .latLong
+         ?.let { (lat, long) -> Location(lat, long) }
+     }
++  }
++
++  private fun unredactedUri(): Uri = try {
++    MediaStore.setRequireOriginal(contentUri)
++  } catch (_: Exception) {
++    contentUri
++  }
++
++  private fun extractVideoLocation(): Location? {
++    val originalUri = try {
++      MediaStore.setRequireOriginal(contentUri)
++    } catch (_: Exception) {
++      contentUri
++    }
++    val retriever = MediaMetadataRetriever()
++    return try {
++      contentResolver.openAssetFileDescriptor(originalUri, "r")?.use { afd ->
++        retriever.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
++        val iso = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_LOCATION)
++          ?: return null
++        parseIso6709Location(iso)
++      }
++    } catch (_: Exception) {
++      null
++    } finally {
++      retriever.release()
++    }
++  }
++
++  private fun parseIso6709Location(iso: String): Location? {
++    val match = Regex("([+-]\\d+(?:\\.\\d+)?)([+-]\\d+(?:\\.\\d+)?)").find(iso) ?: return null
++    val lat = match.groupValues[1].toDoubleOrNull() ?: return null
++    val lon = match.groupValues[2].toDoubleOrNull() ?: return null
++    return Location(lat, lon)
++  }
+ 
+   override suspend fun getExif(): Bundle = withContext(Dispatchers.IO) {
+     if (getMediaType() != MediaType.IMAGE) {
