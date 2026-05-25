@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 
 import {
   addListener,
+  Album,
   Asset,
   AssetField,
   MediaSubtype,
@@ -19,8 +20,7 @@ export type FeedState =
 const SCREENSHOT_BATCH = 500;
 const screenshotCache = new Map<string, boolean>();
 
-async function rejectScreenshots(assets: Asset[]): Promise<Asset[]> {
-  if (Platform.OS !== 'ios') return assets;
+async function rejectScreenshotsIOS(assets: Asset[]): Promise<Asset[]> {
   const kept: Asset[] = [];
   for (let i = 0; i < assets.length; i += SCREENSHOT_BATCH) {
     const slice = assets.slice(i, i + SCREENSHOT_BATCH);
@@ -43,6 +43,24 @@ async function rejectScreenshots(assets: Asset[]): Promise<Asset[]> {
     }
   }
   return kept;
+}
+
+async function rejectScreenshotsAndroid(assets: Asset[]): Promise<Asset[]> {
+  try {
+    const album = await Album.get('Screenshots');
+    if (!album) return assets;
+    const shots = await album.getAssets();
+    const blocked = new Set(shots.map((a) => a.id));
+    return assets.filter((a) => !blocked.has(a.id));
+  } catch {
+    return assets;
+  }
+}
+
+async function rejectScreenshots(assets: Asset[]): Promise<Asset[]> {
+  if (Platform.OS === 'ios') return rejectScreenshotsIOS(assets);
+  if (Platform.OS === 'android') return rejectScreenshotsAndroid(assets);
+  return assets;
 }
 
 export function useAssetFeed(enabled: boolean) {
