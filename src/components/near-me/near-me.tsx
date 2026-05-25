@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -10,13 +10,12 @@ import { Colors, BottomTabInset } from '@/constants/theme';
 import { useAssetFeed } from '@/hooks/use-asset-feed';
 import { useCurrentLocation } from '@/hooks/use-current-location';
 import {
-  PHOTO_RADIUS_METERS,
-  VIDEO_RADIUS_METERS,
   refreshNearby,
   useNearbyAssets,
+  type NearbyAsset,
 } from '@/hooks/use-nearby-assets';
 
-type Tab = 'photos' | 'videos';
+const TOP_BAR_INSET = 56;
 
 export function NearMe() {
   const [mediaPermission, requestMediaPermission] = usePermissions();
@@ -28,7 +27,12 @@ export function NearMe() {
   const origin = locationState.status === 'ready' ? locationState.coords : null;
   const nearby = useNearbyAssets(assets, origin);
 
-  const [tab, setTab] = useState<Tab>('photos');
+  const items: NearbyAsset[] = useMemo(() => {
+    const merged = [...nearby.photos, ...nearby.videos];
+    merged.sort((a, b) => a.distance - b.distance);
+    return merged;
+  }, [nearby.photos, nearby.videos]);
+
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
 
   if (!mediaPermission) {
@@ -103,64 +107,27 @@ export function NearMe() {
   }
 
   const isScanning = nearby.status === 'scanning';
-  const progress =
-    nearby.total > 0 ? Math.min(100, Math.round((nearby.scanned / nearby.total) * 100)) : 0;
-
-  const items = tab === 'photos' ? nearby.photos : nearby.videos;
-  const radius = tab === 'photos' ? PHOTO_RADIUS_METERS : VIDEO_RADIUS_METERS;
-  const subtitle = isScanning
-    ? `scanning ${progress}% · ${items.length} found`
-    : `${items.length} within ${radius}m`;
 
   return (
     <View style={styles.container}>
-      <SafeAreaView edges={['top']} style={styles.header}>
-        <View>
-          <Text style={styles.headerTitle}>Near Me</Text>
-          <Text style={styles.headerSub}>{subtitle}</Text>
-        </View>
-        <Pressable
-          onPress={() => {
-            refreshNearby();
-            refreshLocation();
-          }}
-          style={styles.refreshBtn}
-          disabled={isScanning}
-          hitSlop={8}>
-          <Text style={styles.refreshLabel}>refresh</Text>
-        </Pressable>
-      </SafeAreaView>
-
-      <View style={styles.segmentRow}>
-        <SegmentButton
-          label={`Photos · ${nearby.photos.length}`}
-          active={tab === 'photos'}
-          onPress={() => {
-            setTab('photos');
-            setViewerIndex(null);
-          }}
-        />
-        <SegmentButton
-          label={`Videos · ${nearby.videos.length}`}
-          active={tab === 'videos'}
-          onPress={() => {
-            setTab('videos');
-            setViewerIndex(null);
-          }}
-        />
-      </View>
-
       {items.length === 0 && !isScanning ? (
-        <View style={styles.empty}>
+        <SafeAreaView style={styles.empty}>
           <Text style={styles.emptyTitle}>Nothing here yet</Text>
-          <Text style={styles.emptySub}>
-            No {tab} within {radius}m.
-          </Text>
-        </View>
+          <Text style={styles.emptySub}>No photos or videos nearby.</Text>
+          <Pressable
+            onPress={() => {
+              refreshNearby();
+              refreshLocation();
+            }}
+            style={styles.button}>
+            <Text style={styles.buttonLabel}>Refresh</Text>
+          </Pressable>
+        </SafeAreaView>
       ) : (
         <Grid
           items={items}
           onPressItem={(i) => setViewerIndex(i)}
+          paddingTop={TOP_BAR_INSET}
           paddingBottom={BottomTabInset + 24}
         />
       )}
@@ -173,24 +140,6 @@ export function NearMe() {
         />
       )}
     </View>
-  );
-}
-
-function SegmentButton({
-  label,
-  active,
-  onPress,
-}: {
-  label: string;
-  active: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      onPress={onPress}
-      style={[styles.segmentBtn, active && styles.segmentBtnActive]}>
-      <Text style={[styles.segmentLabel, active && styles.segmentLabelActive]}>{label}</Text>
-    </Pressable>
   );
 }
 
@@ -227,60 +176,12 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '700',
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-  },
-  headerTitle: {
-    color: '#fff',
-    fontSize: 24,
-    fontWeight: '700',
-  },
-  headerSub: {
-    color: Colors.dark.textSecondary,
-    fontSize: 13,
-    marginTop: 2,
-  },
-  refreshBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  refreshLabel: {
-    color: '#3c87f7',
-    fontSize: 14,
-  },
-  segmentRow: {
-    flexDirection: 'row',
-    paddingHorizontal: 12,
-    paddingBottom: 10,
-    gap: 8,
-  },
-  segmentBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 16,
-    backgroundColor: Colors.dark.backgroundElement,
-  },
-  segmentBtnActive: {
-    backgroundColor: '#fff',
-  },
-  segmentLabel: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  segmentLabelActive: {
-    color: '#000',
-  },
   empty: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 24,
-    gap: 8,
+    gap: 12,
   },
   emptyTitle: {
     color: '#fff',

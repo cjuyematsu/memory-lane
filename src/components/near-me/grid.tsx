@@ -20,10 +20,12 @@ const GAP = 2;
 export function Grid({
   items,
   onPressItem,
+  paddingTop = 0,
   paddingBottom,
 }: {
   items: NearbyAsset[];
   onPressItem: (index: number) => void;
+  paddingTop?: number;
   paddingBottom: number;
 }) {
   const { width } = useWindowDimensions();
@@ -35,7 +37,7 @@ export function Grid({
       keyExtractor={(it) => it.asset.id}
       numColumns={COLUMNS}
       columnWrapperStyle={styles.row}
-      contentContainerStyle={[styles.content, { paddingBottom }]}
+      contentContainerStyle={[styles.content, { paddingTop, paddingBottom }]}
       renderItem={({ item, index }) => (
         <Pressable onPress={() => onPressItem(index)} style={styles.cellWrapper}>
           <GridCell item={item} size={cellSize} />
