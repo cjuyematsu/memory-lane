@@ -17,6 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import { Asset, usePermissions } from 'expo-media-library';
 
+import ShuffleIcon from '@/assets/icons/shuffle.svg';
 import { FeedCard } from '@/components/feed/feed-card';
 import { Colors } from '@/constants/theme';
 import { useAssetFeed } from '@/hooks/use-asset-feed';
@@ -239,8 +240,8 @@ export function Feed() {
         extraData={currentId}
       />
       <SafeAreaView style={styles.shuffleWrapper} pointerEvents="box-none">
-        <Pressable style={styles.shuffle} onPress={shuffle}>
-          <Text style={styles.shuffleLabel}>shuffle</Text>
+        <Pressable style={styles.shuffle} onPress={shuffle} hitSlop={12}>
+          <ShuffleIcon width={28} height={28} fill="#fff" />
         </Pressable>
       </SafeAreaView>
     </View>
@@ -282,19 +283,12 @@ const styles = StyleSheet.create({
   },
   shuffleWrapper: {
     position: 'absolute',
-    top: 0,
+    bottom: 0,
     right: 0,
+    alignItems: 'flex-end',
   },
   shuffle: {
-    margin: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 18,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-  },
-  shuffleLabel: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
+    margin: 24,
+    padding: 6,
   },
 });
