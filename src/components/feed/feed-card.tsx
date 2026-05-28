@@ -1,34 +1,43 @@
-import { useEffect, useState } from 'react';
+import { memo, useContext, useEffect, useState } from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+} from 'react-native-reanimated';
 
 import { Image } from 'expo-image';
 import { Asset, MediaType } from 'expo-media-library';
 import { VideoView, useVideoPlayer } from 'expo-video';
 
+import { FeedCardEventsContext } from '@/components/feed/feed-context';
 import { useAssetMetadata, usePlaybackUri } from '@/hooks/use-asset-metadata';
 import { useReverseGeocode } from '@/hooks/use-reverse-geocode';
 import { formatTimeAgo } from '@/utils/time-ago';
 
 const PLACE_TIMEOUT_MS = 1500;
 
-export function FeedCard({
+export const FeedCard = memo(function FeedCard({
   asset,
   isCurrent,
+  isActive = true,
   width,
   height,
 }: {
   asset: Asset;
   isCurrent: boolean;
+  isActive?: boolean;
   width: number;
   height: number;
 }) {
   const meta = useAssetMetadata(asset);
   const placeName = useReverseGeocode(meta?.location ?? null);
   const isVideo = meta?.mediaType === MediaType.VIDEO;
-  const playbackUri = usePlaybackUri(isVideo && isCurrent ? asset : null);
+  const playbackUri = usePlaybackUri(isVideo && isCurrent && isActive ? asset : null);
   const thumbnailUri = Platform.OS === 'ios' ? asset.id : meta?.uri;
+  const { onCardReady } = useContext(FeedCardEventsContext);
 
   const [placeTimedOut, setPlaceTimedOut] = useState(false);
+  const [imageReady, setImageReady] = useState(false);
   useEffect(() => {
     setPlaceTimedOut(false);
     if (!meta?.location || placeName) return;
@@ -38,30 +47,55 @@ export function FeedCard({
 
   const overlayReady =
     meta != null && (meta.location == null || placeName != null || placeTimedOut);
+  const cardReady = imageReady && overlayReady;
+
+  // Keep the card invisible until the image is actually decoded AND the
+  // metadata/placename has settled, then snap to full opacity. The previous
+  // 180ms fade was perceived as a "flash" — a visible dim-to-bright sweep
+  // on every new card. Snap-in keeps the linked image+caption guarantee
+  // (both appear together, never one before the other) without the visible
+  // transition. The shuffle/wrap crossfade overlay covers the brief invisible
+  // window during loading, so the user only sees the snap when the card is
+  // actually ready.
+  const opacity = useSharedValue(0);
+  const opacityStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
+
+  useEffect(() => {
+    if (!cardReady) return;
+    opacity.value = 1;
+    onCardReady(asset.id);
+  }, [cardReady, opacity, onCardReady, asset.id]);
 
   return (
-    <View style={[styles.container, { width, height }]}>
-      {thumbnailUri ? (
-        <Image
-          source={{ uri: thumbnailUri }}
-          style={StyleSheet.absoluteFill}
-          contentFit="contain"
-          cachePolicy="memory-disk"
-          transition={0}
-          recyclingKey={asset.id}
-        />
-      ) : null}
-      {isVideo && isCurrent && playbackUri ? <FeedVideo uri={playbackUri} /> : null}
-      <View style={styles.gradient} pointerEvents="none" />
-      {overlayReady ? (
-        <View style={styles.overlay}>
-          <Text style={styles.timeAgo}>{formatTimeAgo(meta.creationTime)}</Text>
-          {placeName ? <Text style={styles.place}>{placeName}</Text> : null}
-        </View>
-      ) : null}
-    </View>
+    <Animated.View style={[styles.container, { width, height }, opacityStyle]}>
+      <View style={styles.media}>
+        {thumbnailUri ? (
+          <Image
+            source={{ uri: thumbnailUri }}
+            style={StyleSheet.absoluteFill}
+            contentFit="contain"
+            cachePolicy={isCurrent ? 'memory-disk' : 'disk'}
+            transition={0}
+            recyclingKey={asset.id}
+            onLoad={() => setImageReady(true)}
+            onError={() => setImageReady(true)}
+          />
+        ) : null}
+        {isVideo && isCurrent && isActive && playbackUri ? <FeedVideo uri={playbackUri} /> : null}
+      </View>
+      <View style={styles.captionRow}>
+        {overlayReady ? (
+          <View style={styles.captionText}>
+            <Text style={styles.timeAgo}>{formatTimeAgo(meta.creationTime)}</Text>
+            {placeName ? <Text style={styles.place}>{placeName}</Text> : null}
+          </View>
+        ) : (
+          <View style={styles.captionText} />
+        )}
+      </View>
+    </Animated.View>
   );
-}
+});
 
 function FeedVideo({ uri }: { uri: string }) {
   const player = useVideoPlayer(uri, (p) => {
@@ -72,6 +106,7 @@ function FeedVideo({ uri }: { uri: string }) {
 
   return (
     <VideoView
+      key={uri}
       player={player}
       style={StyleSheet.absoluteFill}
       contentFit="contain"
@@ -80,39 +115,40 @@ function FeedVideo({ uri }: { uri: string }) {
   );
 }
 
+const CAPTION_ROW_HEIGHT = 150;
+
+export const FEED_CAPTION_HEIGHT = CAPTION_ROW_HEIGHT;
+
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: '#000',
+    // intentionally transparent: while the card fades in, whatever sits
+    // behind it (splash backdrop or the Feed's #000 container) shows through.
+    backgroundColor: 'transparent',
   },
-  gradient: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: 220,
-    backgroundColor: 'rgba(0,0,0,0.35)',
+  media: {
+    flex: 1,
   },
-  overlay: {
-    position: 'absolute',
-    bottom: 100,
-    left: 24,
-    right: 24,
-    gap: 6,
+  captionRow: {
+    height: CAPTION_ROW_HEIGHT,
+    paddingLeft: 24,
+    paddingRight: 72,
+    paddingTop: 4,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  captionText: {
+    flex: 1,
+    gap: 4,
   },
   timeAgo: {
     color: '#fff',
-    fontSize: 30,
+    fontSize: 24,
     fontWeight: '700',
-    textShadowColor: 'rgba(0,0,0,0.6)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 6,
   },
   place: {
     color: '#fff',
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '500',
-    textShadowColor: 'rgba(0,0,0,0.6)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 6,
+    opacity: 0.85,
   },
 });

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 
+import { File, Paths } from 'expo-file-system';
 import {
   addListener,
   Album,
@@ -19,30 +20,65 @@ export type FeedState =
 
 const SCREENSHOT_BATCH = 500;
 const screenshotCache = new Map<string, boolean>();
+let screenshotCacheLoaded = false;
+let screenshotCacheDirty = false;
+
+const SCREENSHOT_CACHE_FILE = 'screenshot-cache.json';
+
+function getCacheFile() {
+  return new File(Paths.cache, SCREENSHOT_CACHE_FILE);
+}
+
+async function loadScreenshotCacheFromDisk(): Promise<void> {
+  if (screenshotCacheLoaded) return;
+  screenshotCacheLoaded = true;
+  try {
+    const file = getCacheFile();
+    if (!file.exists) return;
+    const text = await file.text();
+    const parsed = JSON.parse(text) as Record<string, boolean>;
+    for (const [id, v] of Object.entries(parsed)) {
+      screenshotCache.set(id, v);
+    }
+  } catch {
+    // ignore corrupt cache
+  }
+}
+
+async function persistScreenshotCache(): Promise<void> {
+  if (!screenshotCacheDirty) return;
+  screenshotCacheDirty = false;
+  try {
+    const obj: Record<string, boolean> = {};
+    for (const [id, v] of screenshotCache) obj[id] = v;
+    const file = getCacheFile();
+    if (!file.exists) file.create();
+    file.write(JSON.stringify(obj));
+  } catch {
+    // ignore write failure
+  }
+}
 
 async function rejectScreenshotsIOS(assets: Asset[]): Promise<Asset[]> {
-  const kept: Asset[] = [];
-  for (let i = 0; i < assets.length; i += SCREENSHOT_BATCH) {
-    const slice = assets.slice(i, i + SCREENSHOT_BATCH);
-    const flags = await Promise.all(
+  await loadScreenshotCacheFromDisk();
+  // Only fetch subtypes for assets we haven't seen before.
+  const toCheck = assets.filter((a) => !screenshotCache.has(a.id));
+  for (let i = 0; i < toCheck.length; i += SCREENSHOT_BATCH) {
+    const slice = toCheck.slice(i, i + SCREENSHOT_BATCH);
+    await Promise.all(
       slice.map(async (a) => {
-        const cached = screenshotCache.get(a.id);
-        if (cached !== undefined) return cached;
         try {
           const subtypes = await a.getMediaSubtypes();
-          const isShot = subtypes.includes(MediaSubtype.SCREENSHOT);
-          screenshotCache.set(a.id, isShot);
-          return isShot;
+          screenshotCache.set(a.id, subtypes.includes(MediaSubtype.SCREENSHOT));
         } catch {
-          return false;
+          screenshotCache.set(a.id, false);
         }
+        screenshotCacheDirty = true;
       })
     );
-    for (let j = 0; j < slice.length; j++) {
-      if (!flags[j]) kept.push(slice[j]);
-    }
   }
-  return kept;
+  if (screenshotCacheDirty) persistScreenshotCache();
+  return assets.filter((a) => !screenshotCache.get(a.id));
 }
 
 async function rejectScreenshotsAndroid(assets: Asset[]): Promise<Asset[]> {
@@ -63,28 +99,61 @@ async function rejectScreenshots(assets: Asset[]): Promise<Asset[]> {
   return assets;
 }
 
-export function useAssetFeed(enabled: boolean) {
-  const [state, setState] = useState<FeedState>({ status: 'idle' });
-  const reqId = useRef(0);
+// Module-level cache so re-mounts of useAssetFeed are instant within a session.
+let cachedAssets: Asset[] | null = null;
+let inflightReload: Promise<Asset[]> | null = null;
+const subscribers = new Set<(assets: Asset[]) => void>();
 
-  const reload = useCallback(async (silent = false) => {
-    const myId = ++reqId.current;
-    if (!silent) setState({ status: 'loading' });
+function publishAssets(assets: Asset[]) {
+  cachedAssets = assets;
+  for (const fn of subscribers) fn(assets);
+}
+
+async function runReload(): Promise<Asset[]> {
+  if (inflightReload) return inflightReload;
+  inflightReload = (async () => {
     try {
       const raw = await new Query()
         .within(AssetField.MEDIA_TYPE, [MediaType.IMAGE, MediaType.VIDEO])
         .orderBy({ key: AssetField.CREATION_TIME, ascending: false })
         .limit(10000)
         .exe();
-      if (reqId.current !== myId) return;
-      const assets = await rejectScreenshots(raw);
-      if (reqId.current !== myId) return;
-      setState({ status: 'ready', assets });
+      const filtered = await rejectScreenshots(raw);
+      publishAssets(filtered);
+      return filtered;
+    } finally {
+      inflightReload = null;
+    }
+  })();
+  return inflightReload;
+}
+
+export function useAssetFeed(enabled: boolean) {
+  const [state, setState] = useState<FeedState>(() =>
+    cachedAssets
+      ? { status: 'ready', assets: cachedAssets }
+      : { status: 'idle' }
+  );
+  const reqId = useRef(0);
+
+  const reload = useCallback(async (silent = false) => {
+    const myId = ++reqId.current;
+    if (!silent && !cachedAssets) setState({ status: 'loading' });
+    try {
+      await runReload();
     } catch (e) {
       if (reqId.current !== myId) return;
       if (silent) return;
       setState({ status: 'error', message: e instanceof Error ? e.message : String(e) });
     }
+  }, []);
+
+  useEffect(() => {
+    const fn = (assets: Asset[]) => setState({ status: 'ready', assets });
+    subscribers.add(fn);
+    return () => {
+      subscribers.delete(fn);
+    };
   }, []);
 
   useEffect(() => {

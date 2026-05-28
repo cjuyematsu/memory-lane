@@ -119,7 +119,7 @@ export async function hydrateAsset(asset: Asset): Promise<AssetMetadata> {
       ]);
       const meta: AssetMetadata = {
         uri: info.uri,
-        creationTime: info.creationTime,
+        creationTime: info.creationTime ?? null,
         location: locationFromCache,
         mediaType,
       };
@@ -157,15 +157,28 @@ export function useAssetMetadata(asset: Asset | null): AssetMetadata | null {
       return;
     }
     let cancelled = false;
-    hydrateAsset(asset)
-      .then((m) => {
-        if (!cancelled) setMeta(m);
-      })
-      .catch(() => {
-        // asset disappeared; leave as null
-      });
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempt = 0;
+    const maxAttempts = 3;
+
+    const tryHydrate = () => {
+      hydrateAsset(asset)
+        .then((m) => {
+          if (!cancelled) setMeta(m);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          attempt += 1;
+          if (attempt < maxAttempts) {
+            retryTimer = setTimeout(tryHydrate, 400 * attempt);
+          }
+        });
+    };
+    tryHydrate();
+
     return () => {
       cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
     };
   }, [asset]);
 

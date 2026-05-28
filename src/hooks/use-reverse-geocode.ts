@@ -43,6 +43,11 @@ async function lookup(coords: Coords): Promise<string | null> {
   return p;
 }
 
+export function prefetchReverseGeocode(coords: Coords | null): void {
+  if (!coords) return;
+  lookup(coords).catch(() => {});
+}
+
 export function useReverseGeocode(coords: Coords | null): string | null {
   const [name, setName] = useState<string | null>(() =>
     coords ? cache.get(keyFor(coords)) ?? null : null
