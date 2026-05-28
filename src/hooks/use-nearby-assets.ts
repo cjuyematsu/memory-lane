@@ -19,6 +19,8 @@ export type NearbyAsset = {
   location: AssetLocation;
   distance: number;
   isEstimated: boolean;
+  mediaType: MediaType;
+  creationTime: number | null;
 };
 
 export type NearbyState = {
@@ -115,6 +117,8 @@ async function runScan(assets: Asset[], origin: { latitude: number; longitude: n
                 location: r.location,
                 distance: d,
                 isEstimated: false,
+                mediaType: MediaType.IMAGE,
+                creationTime: r.creationTime,
               });
             }
           } else if (r.mediaType === MediaType.VIDEO) {
@@ -124,6 +128,8 @@ async function runScan(assets: Asset[], origin: { latitude: number; longitude: n
                 location: r.location,
                 distance: d,
                 isEstimated: false,
+                mediaType: MediaType.VIDEO,
+                creationTime: r.creationTime,
               });
             }
           }
@@ -147,6 +153,8 @@ async function runScan(assets: Asset[], origin: { latitude: number; longitude: n
             location: anchor.location,
             distance: d,
             isEstimated: true,
+            mediaType: MediaType.VIDEO,
+            creationTime: r.creationTime,
           });
         }
       }

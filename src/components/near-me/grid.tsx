@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import {
   FlatList,
   Platform,
@@ -43,13 +44,22 @@ export function Grid({
           <GridCell item={item} size={cellSize} />
         </Pressable>
       )}
+      windowSize={5}
+      initialNumToRender={COLUMNS * 6}
+      maxToRenderPerBatch={COLUMNS * 4}
     />
   );
 }
 
-function GridCell({ item, size }: { item: NearbyAsset; size: number }) {
-  const meta = useAssetMetadata(item.asset);
-  const isVideo = meta?.mediaType === MediaType.VIDEO;
+const GridCell = memo(function GridCell({
+  item,
+  size,
+}: {
+  item: NearbyAsset;
+  size: number;
+}) {
+  const isVideo = item.mediaType === MediaType.VIDEO;
+  const meta = useAssetMetadata(Platform.OS === 'ios' ? null : item.asset);
   const thumbnailUri = Platform.OS === 'ios' ? item.asset.id : meta?.uri;
 
   return (
@@ -76,7 +86,7 @@ function GridCell({ item, size }: { item: NearbyAsset; size: number }) {
       ) : null}
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   row: {

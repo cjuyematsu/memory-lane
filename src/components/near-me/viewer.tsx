@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import {
   FlatList,
   Platform,
@@ -13,16 +13,18 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Image } from 'expo-image';
 import { MediaType } from 'expo-media-library';
-import { useIsFocused } from 'expo-router';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
+  Easing,
   useAnimatedStyle,
   useSharedValue,
   withSpring,
+  withTiming,
 } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
 
+import FilmIcon from '@/assets/icons/film.svg';
 import { useAssetMetadata, usePlaybackUri } from '@/hooks/use-asset-metadata';
 import { useReverseGeocode } from '@/hooks/use-reverse-geocode';
 import type { NearbyAsset } from '@/hooks/use-nearby-assets';
@@ -35,11 +37,15 @@ const DISMISS_THRESHOLD = 120;
 export function Viewer({
   items,
   startIndex,
+  isActive = true,
   onClose,
+  onOpenMemoryFeed,
 }: {
   items: NearbyAsset[];
   startIndex: number;
+  isActive?: boolean;
   onClose: () => void;
+  onOpenMemoryFeed?: (assetId: string) => void;
 }) {
   const { width, height } = useWindowDimensions();
   const [index, setIndex] = useState(startIndex);
@@ -48,6 +54,25 @@ export function Viewer({
 
   const translateY = useSharedValue(0);
   const backdropOpacity = useSharedValue(1);
+  const openProgress = useSharedValue(0);
+
+  useEffect(() => {
+    openProgress.value = withTiming(1, {
+      duration: 240,
+      easing: Easing.out(Easing.cubic),
+    });
+  }, [openProgress]);
+
+  const handleClose = () => {
+    openProgress.value = withTiming(
+      0,
+      { duration: 200, easing: Easing.in(Easing.cubic) },
+      (finished) => {
+        'worklet';
+        if (finished) scheduleOnRN(onClose);
+      }
+    );
+  };
 
   const pan = Gesture.Pan()
     .activeOffsetY([-15, 15])
@@ -73,6 +98,10 @@ export function Viewer({
   const backdropStyle = useAnimatedStyle(() => ({
     opacity: backdropOpacity.value,
   }));
+  const openStyle = useAnimatedStyle(() => ({
+    opacity: openProgress.value,
+    transform: [{ scale: 0.96 + openProgress.value * 0.04 }],
+  }));
 
   useEffect(() => {
     const thumbStride = THUMB_SIZE + THUMB_GAP;
@@ -82,13 +111,22 @@ export function Viewer({
     });
   }, [index, width]);
 
+  useEffect(() => {
+    const uris: string[] = [];
+    for (const d of [-2, -1, 1, 2, 3]) {
+      const it = items[index + d];
+      if (it) uris.push(it.asset.id);
+    }
+    if (uris.length > 0) Image.prefetch(uris).catch(() => {});
+  }, [index, items]);
+
   const jumpTo = (i: number) => {
     setIndex(i);
     pagerRef.current?.scrollToIndex({ index: i, animated: false });
   };
 
   return (
-    <View style={StyleSheet.absoluteFill}>
+    <Animated.View style={[StyleSheet.absoluteFill, openStyle]}>
       <Animated.View style={[styles.backdrop, backdropStyle]} />
       <GestureDetector gesture={pan}>
         <Animated.View style={[StyleSheet.absoluteFill, containerStyle]}>
@@ -105,11 +143,16 @@ export function Viewer({
               <ViewerPage
                 item={item}
                 isCurrent={i === index}
+                isActive={isActive}
                 width={width}
                 height={height}
               />
             )}
             extraData={index}
+            windowSize={3}
+            initialNumToRender={1}
+            maxToRenderPerBatch={2}
+            removeClippedSubviews
             onMomentumScrollEnd={(e) => {
               const next = Math.round(e.nativeEvent.contentOffset.x / width);
               if (next !== index) setIndex(next);
@@ -117,12 +160,22 @@ export function Viewer({
           />
 
           <SafeAreaView style={styles.topBar} pointerEvents="box-none">
-            <Pressable style={styles.closeBtn} onPress={onClose} hitSlop={12}>
+            <Pressable style={styles.closeBtn} onPress={handleClose} hitSlop={12}>
               <Text style={styles.closeLabel}>✕</Text>
             </Pressable>
           </SafeAreaView>
 
-          <SafeAreaView style={styles.bottomBar} pointerEvents="box-none">
+          <SafeAreaView style={styles.bottomBar} edges={['bottom']} pointerEvents="box-none">
+            {onOpenMemoryFeed ? (
+              <View style={styles.filmRow} pointerEvents="box-none">
+                <Pressable
+                  onPress={() => onOpenMemoryFeed(items[index].asset.id)}
+                  style={styles.filmBtn}
+                  hitSlop={12}>
+                  <FilmIcon width={28} height={28} fill="#fff" />
+                </Pressable>
+              </View>
+            ) : null}
             <ScrollView
               ref={filmRef}
               horizontal
@@ -140,25 +193,27 @@ export function Viewer({
           </SafeAreaView>
         </Animated.View>
       </GestureDetector>
-    </View>
+    </Animated.View>
   );
 }
 
-function ViewerPage({
+const ViewerPage = memo(function ViewerPage({
   item,
   isCurrent,
+  isActive,
   width,
   height,
 }: {
   item: NearbyAsset;
   isCurrent: boolean;
+  isActive: boolean;
   width: number;
   height: number;
 }) {
-  const meta = useAssetMetadata(item.asset);
-  const placeName = useReverseGeocode(meta?.location ?? item.location ?? null);
-  const isVideo = meta?.mediaType === MediaType.VIDEO;
+  const placeName = useReverseGeocode(item.location);
+  const isVideo = item.mediaType === MediaType.VIDEO;
   const playbackUri = usePlaybackUri(isVideo && isCurrent ? item.asset : null);
+  const meta = useAssetMetadata(Platform.OS === 'ios' ? null : item.asset);
   const thumbnailUri = Platform.OS === 'ios' ? item.asset.id : meta?.uri;
 
   return (
@@ -173,10 +228,12 @@ function ViewerPage({
           recyclingKey={item.asset.id}
         />
       ) : null}
-      {isVideo && isCurrent && playbackUri ? <ViewerVideo uri={playbackUri} /> : null}
+      {isVideo && isCurrent && isActive && playbackUri ? (
+        <ViewerVideo uri={playbackUri} />
+      ) : null}
       <View style={styles.gradient} pointerEvents="none" />
       <View style={styles.overlay}>
-        <Text style={styles.timeAgo}>{formatTimeAgo(meta?.creationTime ?? null)}</Text>
+        <Text style={styles.timeAgo}>{formatTimeAgo(item.creationTime)}</Text>
         {placeName ? (
           <Text style={styles.place}>
             {item.isEstimated ? '~ ' : ''}
@@ -186,26 +243,18 @@ function ViewerPage({
       </View>
     </View>
   );
-}
+});
 
 function ViewerVideo({ uri }: { uri: string }) {
-  const isFocused = useIsFocused();
   const player = useVideoPlayer(uri, (p) => {
     p.loop = true;
-    p.muted = false;
+    p.muted = true;
     p.play();
   });
 
-  useEffect(() => {
-    if (isFocused) {
-      player.play();
-    } else {
-      player.pause();
-    }
-  }, [isFocused, player]);
-
   return (
     <VideoView
+      key={uri}
       player={player}
       style={StyleSheet.absoluteFill}
       contentFit="contain"
@@ -214,11 +263,11 @@ function ViewerVideo({ uri }: { uri: string }) {
   );
 }
 
-function FilmstripThumb({ item }: { item: NearbyAsset }) {
-  const meta = useAssetMetadata(item.asset);
-  const isVideo = meta?.mediaType === MediaType.VIDEO;
+const FilmstripThumb = memo(function FilmstripThumb({ item }: { item: NearbyAsset }) {
+  const isVideo = item.mediaType === MediaType.VIDEO;
+  const meta = useAssetMetadata(Platform.OS === 'ios' ? null : item.asset);
   const thumbnailUri = Platform.OS === 'ios' ? item.asset.id : meta?.uri;
-  if (!thumbnailUri) return null;
+  if (!thumbnailUri) return <View style={styles.thumb} />;
   return (
     <View style={styles.thumb}>
       <Image
@@ -236,7 +285,7 @@ function FilmstripThumb({ item }: { item: NearbyAsset }) {
       ) : null}
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   backdrop: {
@@ -272,11 +321,20 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
   },
+  filmRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    paddingHorizontal: 12,
+    paddingBottom: 8,
+  },
+  filmBtn: {
+    padding: 6,
+  },
   filmstrip: {
     gap: THUMB_GAP,
     paddingHorizontal: 12,
-    paddingTop: 12,
-    paddingBottom: 80,
+    paddingTop: 8,
+    paddingBottom: 16,
   },
   thumbWrap: {
     width: THUMB_SIZE,

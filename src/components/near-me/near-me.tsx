@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { usePermissions } from 'expo-media-library';
 
@@ -15,9 +15,17 @@ import {
   type NearbyAsset,
 } from '@/hooks/use-nearby-assets';
 
-const TOP_BAR_INSET = 56;
+const TAB_BAR_HEIGHT = 46;
 
-export function NearMe() {
+export function NearMe({
+  isActive = true,
+  onOpenMemoryFeed,
+}: {
+  isActive?: boolean;
+  onOpenMemoryFeed?: (assetId: string) => void;
+} = {}) {
+  const insets = useSafeAreaInsets();
+  const gridPaddingTop = insets.top + TAB_BAR_HEIGHT + 8;
   const [mediaPermission, requestMediaPermission] = usePermissions();
   const granted = !!mediaPermission?.granted;
   const { state: feedState, reload: reloadFeed } = useAssetFeed(granted);
@@ -31,7 +39,8 @@ export function NearMe() {
     const merged = [...nearby.photos, ...nearby.videos];
     merged.sort((a, b) => a.distance - b.distance);
     return merged;
-  }, [nearby.photos, nearby.videos]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nearby.photos.length, nearby.videos.length, nearby.status]);
 
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
 
@@ -127,7 +136,7 @@ export function NearMe() {
         <Grid
           items={items}
           onPressItem={(i) => setViewerIndex(i)}
-          paddingTop={TOP_BAR_INSET}
+          paddingTop={gridPaddingTop}
           paddingBottom={BottomTabInset + 24}
         />
       )}
@@ -136,7 +145,9 @@ export function NearMe() {
         <Viewer
           items={items}
           startIndex={Math.min(viewerIndex, items.length - 1)}
+          isActive={isActive}
           onClose={() => setViewerIndex(null)}
+          onOpenMemoryFeed={onOpenMemoryFeed}
         />
       )}
     </View>
