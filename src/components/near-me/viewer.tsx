@@ -40,12 +40,16 @@ export function Viewer({
   isActive = true,
   onClose,
   onOpenMemoryFeed,
+  tapToAdvance = false,
 }: {
   items: NearbyAsset[];
   startIndex: number;
   isActive?: boolean;
   onClose: () => void;
   onOpenMemoryFeed?: (assetId: string) => void;
+  // Story-style navigation: tap right half → next, left half → previous, and
+  // horizontal swipe is disabled. Used by the memories view.
+  tapToAdvance?: boolean;
 }) {
   const { width, height } = useWindowDimensions();
   const [index, setIndex] = useState(startIndex);
@@ -125,6 +129,13 @@ export function Viewer({
     pagerRef.current?.scrollToIndex({ index: i, animated: false });
   };
 
+  const goNext = () => {
+    if (index < items.length - 1) jumpTo(index + 1);
+  };
+  const goPrev = () => {
+    if (index > 0) jumpTo(index - 1);
+  };
+
   return (
     <Animated.View style={[StyleSheet.absoluteFill, openStyle]}>
       <Animated.View style={[styles.backdrop, backdropStyle]} />
@@ -135,6 +146,7 @@ export function Viewer({
             data={items}
             horizontal
             pagingEnabled
+            scrollEnabled={!tapToAdvance}
             showsHorizontalScrollIndicator={false}
             initialScrollIndex={startIndex}
             getItemLayout={(_, i) => ({ length: width, offset: width * i, index: i })}
@@ -159,38 +171,79 @@ export function Viewer({
             }}
           />
 
-          <SafeAreaView style={styles.topBar} pointerEvents="box-none">
-            <Pressable style={styles.closeBtn} onPress={handleClose} hitSlop={12}>
-              <Text style={styles.closeLabel}>✕</Text>
-            </Pressable>
-          </SafeAreaView>
+          {tapToAdvance ? (
+            <View style={styles.tapZones}>
+              <Pressable style={styles.tapZone} onPress={goPrev} />
+              <Pressable style={styles.tapZone} onPress={goNext} />
+            </View>
+          ) : null}
 
-          <SafeAreaView style={styles.bottomBar} edges={['bottom']} pointerEvents="box-none">
-            {onOpenMemoryFeed ? (
-              <View style={styles.filmRow} pointerEvents="box-none">
-                <Pressable
-                  onPress={() => onOpenMemoryFeed(items[index].asset.id)}
-                  style={styles.filmBtn}
-                  hitSlop={12}>
-                  <FilmIcon width={28} height={28} fill="#fff" />
-                </Pressable>
+          {tapToAdvance ? (
+            // IG-style: segmented progress bars at the top, no filmstrip.
+            <SafeAreaView edges={['top']} style={styles.storyTop} pointerEvents="box-none">
+              <View style={styles.progressRow}>
+                {items.length <= 30 ? (
+                  items.map((it, i) => (
+                    <View key={it.asset.id} style={styles.segTrack}>
+                      <View
+                        style={[styles.segFill, i <= index && styles.segFillOn]}
+                      />
+                    </View>
+                  ))
+                ) : (
+                  <View style={styles.segTrack}>
+                    <View
+                      style={[
+                        styles.segFillOn,
+                        { width: `${((index + 1) / items.length) * 100}%` },
+                      ]}
+                    />
+                  </View>
+                )}
               </View>
-            ) : null}
-            <ScrollView
-              ref={filmRef}
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.filmstrip}>
-              {items.map((it, i) => (
-                <Pressable
-                  key={it.asset.id}
-                  onPress={() => jumpTo(i)}
-                  style={[styles.thumbWrap, i === index && styles.thumbWrapActive]}>
-                  <FilmstripThumb item={it} />
+              <Pressable style={styles.storyClose} onPress={handleClose} hitSlop={12}>
+                <Text style={styles.closeLabel}>✕</Text>
+              </Pressable>
+            </SafeAreaView>
+          ) : (
+            <>
+              <SafeAreaView style={styles.topBar} pointerEvents="box-none">
+                <Pressable style={styles.closeBtn} onPress={handleClose} hitSlop={12}>
+                  <Text style={styles.closeLabel}>✕</Text>
                 </Pressable>
-              ))}
-            </ScrollView>
-          </SafeAreaView>
+              </SafeAreaView>
+
+              <SafeAreaView
+                style={styles.bottomBar}
+                edges={['bottom']}
+                pointerEvents="box-none">
+                {onOpenMemoryFeed ? (
+                  <View style={styles.filmRow} pointerEvents="box-none">
+                    <Pressable
+                      onPress={() => onOpenMemoryFeed(items[index].asset.id)}
+                      style={styles.filmBtn}
+                      hitSlop={12}>
+                      <FilmIcon width={28} height={28} fill="#fff" />
+                    </Pressable>
+                  </View>
+                ) : null}
+                <ScrollView
+                  ref={filmRef}
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.filmstrip}>
+                  {items.map((it, i) => (
+                    <Pressable
+                      key={it.asset.id}
+                      onPress={() => jumpTo(i)}
+                      style={[styles.thumbWrap, i === index && styles.thumbWrapActive]}>
+                      <FilmstripThumb item={it} />
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              </SafeAreaView>
+            </>
+          )}
         </Animated.View>
       </GestureDetector>
     </Animated.View>
@@ -295,6 +348,55 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     backgroundColor: '#000',
+  },
+  // Central tap band for story navigation; inset from the top (progress bars)
+  // and bottom so controls keep their own taps.
+  tapZones: {
+    position: 'absolute',
+    top: 90,
+    bottom: 60,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+  },
+  tapZone: {
+    flex: 1,
+  },
+  storyTop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+  },
+  progressRow: {
+    flexDirection: 'row',
+    gap: 3,
+    paddingHorizontal: 10,
+    paddingTop: 8,
+  },
+  segTrack: {
+    flex: 1,
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    overflow: 'hidden',
+  },
+  segFill: {
+    width: '0%',
+    height: '100%',
+    borderRadius: 2,
+  },
+  segFillOn: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 2,
+    backgroundColor: '#fff',
+  },
+  storyClose: {
+    alignSelf: 'flex-end',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    marginTop: 2,
   },
   topBar: {
     position: 'absolute',

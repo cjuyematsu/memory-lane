@@ -18,6 +18,7 @@ import { scheduleOnRN } from 'react-native-worklets';
 
 import { Feed } from '@/components/feed/feed';
 import { NearMe } from '@/components/near-me/near-me';
+import { usePendingCluster } from '@/lib/pending-cluster';
 
 type Tab = 'cameraRoll' | 'nearMe';
 
@@ -38,6 +39,12 @@ export function TopTabs() {
 
   const tabX = useSharedValue(0);
   const overlayX = useSharedValue(width);
+  const pendingCluster = usePendingCluster();
+
+  // A tapped notification routes to the Near Me tab to show that location.
+  useEffect(() => {
+    if (pendingCluster) setTab('nearMe');
+  }, [pendingCluster]);
 
   // Animate the pager when `tab` changes (whether by gesture or tap).
   useEffect(() => {
@@ -65,7 +72,10 @@ export function TopTabs() {
     // gestures can still receive touches independent of pointerEvents, so
     // a horizontal swipe inside the memory feed was leaking through and
     // switching tabs. Disable the gesture entirely while the overlay is up.
-    .enabled(memoryEntry == null)
+    // Disabled while a memory feed or the notification cluster view is open,
+    // so you can't swipe between tabs to escape memories — you must back out
+    // of the memory view first (and out of any open photo before that).
+    .enabled(memoryEntry == null && !pendingCluster)
     .activeOffsetX([-15, 15])
     .failOffsetY([-20, 20])
     .onUpdate((e) => {
@@ -157,7 +167,7 @@ export function TopTabs() {
         </Animated.View>
       </GestureDetector>
 
-      {!memoryEntry ? (
+      {!memoryEntry && !pendingCluster ? (
         <SafeAreaView edges={['top']} style={styles.barWrap} pointerEvents="box-none">
           <View style={styles.bar} pointerEvents="auto">
             <Pressable onPress={() => setTab('cameraRoll')} hitSlop={10}>
