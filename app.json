@@ -9,7 +9,10 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/expo.icon",
-      "bundleIdentifier": "com.uyeyu.memorylane"
+      "bundleIdentifier": "com.uyeyu.memorylane",
+      "infoPlist": {
+        "UIBackgroundModes": ["location"]
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -28,7 +31,9 @@
         "android.permission.READ_MEDIA_VIDEO",
         "android.permission.READ_MEDIA_AUDIO",
         "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION"
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.POST_NOTIFICATIONS"
       ],
       "package": "com.uyeyu.memorylane"
     },
@@ -60,7 +65,10 @@
         "expo-location",
         {
           "locationWhenInUsePermission": "Mems uses your location to surface photos you took nearby.",
-          "isAndroidBackgroundLocationEnabled": false
+          "locationAlwaysAndWhenInUsePermission": "Mems needs background location so it can quietly notify you when you walk past a place you took photos a year+ ago.",
+          "locationAlwaysPermission": "Mems uses background location to notify you about memories from places you walk past.",
+          "isIosBackgroundLocationEnabled": true,
+          "isAndroidBackgroundLocationEnabled": true
         }
       ],
       "expo-video"
