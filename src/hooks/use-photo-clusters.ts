@@ -1,0 +1,172 @@
+import { Asset } from 'expo-media-library';
+
+import {
+  ensureIndex,
+  getIndex,
+  invalidateIndex,
+  loadIndexFromDisk,
+  type AssetIndex,
+  type LocatedAsset,
+} from '@/hooks/use-located-assets';
+
+// ~50m grid quantization. 1° latitude ≈ 111km, so 0.0005° ≈ 55m.
+const CELL_SIZE_DEG = 0.0005;
+const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
+
+export type PhotoCluster = {
+  // Stable identifier derived from the grid cell — survives across sessions
+  // so we can correlate cooldown timestamps and engagement records by id.
+  id: string;
+  centerLat: number;
+  centerLng: number;
+  assetIds: string[];
+  oldestCreationTime: number | null;
+  newestCreationTime: number | null;
+};
+
+// Clusters are a pure derivation of the shared index. Cache is keyed on the
+// index object reference so it auto-recomputes whenever the index rebuilds —
+// no matter which code path triggered the rebuild.
+let cached: PhotoCluster[] | null = null;
+let cachedFrom: AssetIndex | null = null;
+
+function clustersForIndex(index: AssetIndex): PhotoCluster[] {
+  if (cached && cachedFrom === index) return cached;
+  cached = clusterFrom(index.located);
+  cachedFrom = index;
+  return cached;
+}
+
+function cellKey(lat: number, lng: number): string {
+  const cx = Math.round(lat / CELL_SIZE_DEG);
+  const cy = Math.round(lng / CELL_SIZE_DEG);
+  return `${cx},${cy}`;
+}
+
+// Pure, synchronous derivation: group located assets into ~50m cells. Cheap
+// enough to run on demand (no metadata loading — that already happened when
+// the shared index was built).
+function clusterFrom(located: LocatedAsset[]): PhotoCluster[] {
+  const cells = new Map<string, LocatedAsset[]>();
+  for (const a of located) {
+    const k = cellKey(a.lat, a.lng);
+    let list = cells.get(k);
+    if (!list) {
+      list = [];
+      cells.set(k, list);
+    }
+    list.push(a);
+  }
+
+  const clusters: PhotoCluster[] = [];
+  for (const [id, members] of cells) {
+    let sumLat = 0;
+    let sumLng = 0;
+    let oldest = Infinity;
+    let newest = -Infinity;
+    for (const m of members) {
+      sumLat += m.lat;
+      sumLng += m.lng;
+      if (m.creationTime != null) {
+        if (m.creationTime < oldest) oldest = m.creationTime;
+        if (m.creationTime > newest) newest = m.creationTime;
+      }
+    }
+    clusters.push({
+      id,
+      centerLat: sumLat / members.length,
+      centerLng: sumLng / members.length,
+      assetIds: members.map((m) => m.id),
+      oldestCreationTime: isFinite(oldest) ? oldest : null,
+      newestCreationTime: isFinite(newest) ? newest : null,
+    });
+  }
+  return clusters;
+}
+
+export async function ensureClusters(assets: Asset[]): Promise<PhotoCluster[]> {
+  const index = await ensureIndex(assets);
+  return clustersForIndex(index);
+}
+
+export function getClusters(): PhotoCluster[] | null {
+  const index = getIndex();
+  return index ? clustersForIndex(index) : null;
+}
+
+// The background geofence task may run headless (app killed) with an empty
+// module cache — read the shared index from disk and derive clusters from it.
+export async function loadClustersFromDisk(): Promise<PhotoCluster[] | null> {
+  const index = await loadIndexFromDisk();
+  return index ? clustersForIndex(index) : null;
+}
+
+export function invalidateClusters(): void {
+  cached = null;
+  cachedFrom = null;
+  invalidateIndex();
+}
+
+export function isClusterNotifiable(
+  cluster: PhotoCluster,
+  now: number = Date.now()
+): boolean {
+  if (cluster.oldestCreationTime == null) return false;
+  // Notifiable only if it contains a photo older than 90 days, suppressing
+  // places where you currently spend time (home, work).
+  return now - cluster.oldestCreationTime > NINETY_DAYS_MS;
+}
+
+export function distanceMeters(
+  lat1: number,
+  lng1: number,
+  lat2: number,
+  lng2: number
+): number {
+  const R = 6371000;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+export function nearestNotifiableClusters(
+  lat: number,
+  lng: number,
+  n: number,
+  now: number = Date.now()
+): PhotoCluster[] {
+  const clusters = getClusters();
+  if (!clusters) return [];
+  const eligible = clusters.filter((c) => isClusterNotifiable(c, now));
+  eligible.sort(
+    (a, b) =>
+      distanceMeters(lat, lng, a.centerLat, a.centerLng) -
+      distanceMeters(lat, lng, b.centerLat, b.centerLng)
+  );
+  return eligible.slice(0, n);
+}
+
+export function findClusterWithinRadius(
+  lat: number,
+  lng: number,
+  radiusMeters: number,
+  now: number = Date.now()
+): PhotoCluster | null {
+  const clusters = getClusters();
+  if (!clusters) return null;
+  let best: PhotoCluster | null = null;
+  let bestDist = radiusMeters;
+  for (const c of clusters) {
+    if (!isClusterNotifiable(c, now)) continue;
+    const d = distanceMeters(lat, lng, c.centerLat, c.centerLng);
+    if (d <= bestDist) {
+      best = c;
+      bestDist = d;
+    }
+  }
+  return best;
+}
