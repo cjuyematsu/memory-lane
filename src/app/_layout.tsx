@@ -6,6 +6,11 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import { MemoryBanner } from '@/components/notifications/memory-banner';
 import { NotificationOrchestrator } from '@/components/notifications/notification-orchestrator';
+import { configureImageCache } from '@/lib/image-cache';
+
+// Bound the expo-image disk cache once, before any photo renders, so it can't
+// grow without limit as the feed/shuffle decode images across the library.
+configureImageCache();
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
