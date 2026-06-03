@@ -1,5 +1,6 @@
 import { memo, useContext, useEffect, useState } from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
@@ -10,6 +11,8 @@ import { Asset, MediaType } from 'expo-media-library';
 import { VideoView, useVideoPlayer } from 'expo-video';
 
 import { FeedCardEventsContext } from '@/components/feed/feed-context';
+import { PhotoFrame, frameHeight, frameTop } from '@/components/feed/photo-frame';
+import { DisplayFont, FrameMargin, Ink, Paper } from '@/constants/theme';
 import { useAssetMetadata, usePlaybackUri } from '@/hooks/use-asset-metadata';
 import { useReverseGeocode } from '@/hooks/use-reverse-geocode';
 import { formatTimeAgo } from '@/utils/time-ago';
@@ -29,6 +32,7 @@ export const FeedCard = memo(function FeedCard({
   width: number;
   height: number;
 }) {
+  const insets = useSafeAreaInsets();
   const meta = useAssetMetadata(asset);
   const placeName = useReverseGeocode(meta?.location ?? null);
   const isVideo = meta?.mediaType === MediaType.VIDEO;
@@ -38,6 +42,10 @@ export const FeedCard = memo(function FeedCard({
 
   const [placeTimedOut, setPlaceTimedOut] = useState(false);
   const [imageReady, setImageReady] = useState(false);
+  // Landscape photos are letterboxed (contain) on #000; everything else fills
+  // the 3:4 frame (cover). Determined from the decode since Asset has no dims.
+  const [isLandscape, setIsLandscape] = useState(false);
+
   useEffect(() => {
     setPlaceTimedOut(false);
     if (!meta?.location || placeName) return;
@@ -49,14 +57,8 @@ export const FeedCard = memo(function FeedCard({
     meta != null && (meta.location == null || placeName != null || placeTimedOut);
   const cardReady = imageReady && overlayReady;
 
-  // Keep the card invisible until the image is actually decoded AND the
-  // metadata/placename has settled, then snap to full opacity. The previous
-  // 180ms fade was perceived as a "flash" — a visible dim-to-bright sweep
-  // on every new card. Snap-in keeps the linked image+caption guarantee
-  // (both appear together, never one before the other) without the visible
-  // transition. The shuffle/wrap crossfade overlay covers the brief invisible
-  // window during loading, so the user only sees the snap when the card is
-  // actually ready.
+  // Stay invisible until image + caption are both ready, then snap to full
+  // opacity (the shuffle/wrap crossfade covers the loading window).
   const opacity = useSharedValue(0);
   const opacityStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
 
@@ -66,38 +68,52 @@ export const FeedCard = memo(function FeedCard({
     onCardReady(asset.id);
   }, [cardReady, opacity, onCardReady, asset.id]);
 
+  const top = frameTop(insets.top);
+  const captionTop = top + frameHeight(width) + 24;
+
   return (
     <Animated.View style={[styles.container, { width, height }, opacityStyle]}>
-      <View style={styles.media}>
+      <PhotoFrame screenW={width} top={top}>
         {thumbnailUri ? (
           <Image
             source={{ uri: thumbnailUri }}
             style={StyleSheet.absoluteFill}
-            contentFit="contain"
+            contentFit={isLandscape ? 'contain' : 'cover'}
             cachePolicy={isCurrent ? 'memory-disk' : 'disk'}
             transition={0}
             recyclingKey={asset.id}
-            onLoad={() => setImageReady(true)}
+            onLoad={(e) => {
+              const { width: w, height: h } = e.source ?? {};
+              if (w && h) setIsLandscape(w > h);
+              setImageReady(true);
+            }}
             onError={() => setImageReady(true)}
           />
         ) : null}
-        {isVideo && isCurrent && isActive && playbackUri ? <FeedVideo uri={playbackUri} /> : null}
-      </View>
-      <View style={styles.captionRow}>
-        {overlayReady ? (
-          <View style={styles.captionText}>
-            <Text style={styles.timeAgo}>{formatTimeAgo(meta.creationTime)}</Text>
-            {placeName ? <Text style={styles.place}>{placeName}</Text> : null}
-          </View>
-        ) : (
-          <View style={styles.captionText} />
-        )}
-      </View>
+        {isVideo && isCurrent && isActive && playbackUri ? (
+          <FeedVideo uri={playbackUri} contain={isLandscape} />
+        ) : null}
+      </PhotoFrame>
+
+      {overlayReady ? (
+        <View
+          style={[styles.caption, { top: captionTop, left: FrameMargin, right: FrameMargin }]}
+          pointerEvents="none">
+          <Text
+            style={styles.date}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.4}>
+            {formatTimeAgo(meta.creationTime)}
+          </Text>
+          {placeName ? <Text style={styles.place}>{placeName}</Text> : null}
+        </View>
+      ) : null}
     </Animated.View>
   );
 });
 
-function FeedVideo({ uri }: { uri: string }) {
+function FeedVideo({ uri, contain }: { uri: string; contain: boolean }) {
   const player = useVideoPlayer(uri, (p) => {
     p.loop = true;
     p.muted = true;
@@ -109,46 +125,39 @@ function FeedVideo({ uri }: { uri: string }) {
       key={uri}
       player={player}
       style={StyleSheet.absoluteFill}
-      contentFit="contain"
+      contentFit={contain ? 'contain' : 'cover'}
       nativeControls={false}
     />
   );
 }
 
-const CAPTION_ROW_HEIGHT = 150;
-
-export const FEED_CAPTION_HEIGHT = CAPTION_ROW_HEIGHT;
-
 const styles = StyleSheet.create({
   container: {
-    // intentionally transparent: while the card fades in, whatever sits
-    // behind it (splash backdrop or the Feed's #000 container) shows through.
-    backgroundColor: 'transparent',
+    backgroundColor: Paper,
   },
-  media: {
-    flex: 1,
+  caption: {
+    position: 'absolute',
+    // stretch so the date has the full caption width to auto-fit against
+    alignItems: 'stretch',
   },
-  captionRow: {
-    height: CAPTION_ROW_HEIGHT,
-    paddingLeft: 24,
-    paddingRight: 72,
-    paddingTop: 4,
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-  },
-  captionText: {
-    flex: 1,
-    gap: 4,
-  },
-  timeAgo: {
-    color: '#fff',
-    fontSize: 24,
-    fontWeight: '700',
+  date: {
+    fontFamily: DisplayFont,
+    // Base size for short dates ("TODAY"); adjustsFontSizeToFit shrinks longer
+    // ones ("11 YEARS, 364 DAYS AGO") down to one line — never below ~12px,
+    // which stays larger than the place.
+    fontSize: 30,
+    color: Ink,
+    textTransform: 'uppercase',
+    textAlign: 'center',
   },
   place: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '500',
-    opacity: 0.85,
+    fontFamily: DisplayFont,
+    fontSize: 11,
+    lineHeight: 16,
+    color: Ink,
+    textTransform: 'uppercase',
+    textAlign: 'center',
+    letterSpacing: 0.5,
+    marginTop: 10,
   },
 });

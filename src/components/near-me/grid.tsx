@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useState } from 'react';
 import {
   FlatList,
   Platform,
@@ -12,11 +12,13 @@ import {
 import { Image } from 'expo-image';
 import { MediaType } from 'expo-media-library';
 
+import { FrameMargin, Letterbox, PhotoRatio } from '@/constants/theme';
 import { useAssetMetadata } from '@/hooks/use-asset-metadata';
 import type { NearbyAsset } from '@/hooks/use-nearby-assets';
 
 const COLUMNS = 3;
-const GAP = 2;
+const GAP = 4; // black gutter between cells
+const PANEL_PAD = 6; // black border around the grid inside the panel
 
 export function Grid({
   items,
@@ -30,18 +32,23 @@ export function Grid({
   paddingBottom: number;
 }) {
   const { width } = useWindowDimensions();
-  const cellSize = (width - GAP * (COLUMNS - 1)) / COLUMNS;
+  // The grid lives on a black panel the same width as the single-photo frame
+  // (inset by FrameMargin); cells are sized to fill it with black gaps.
+  const panelInner = width - 2 * FrameMargin - 2 * PANEL_PAD;
+  const cellWidth = (panelInner - GAP * (COLUMNS - 1)) / COLUMNS;
+  const cellHeight = cellWidth / PhotoRatio;
 
   return (
     <FlatList
+      style={[styles.panel, { marginTop: paddingTop }]}
       data={items}
       keyExtractor={(it) => it.asset.id}
       numColumns={COLUMNS}
       columnWrapperStyle={styles.row}
-      contentContainerStyle={[styles.content, { paddingTop, paddingBottom }]}
+      contentContainerStyle={[styles.content, { paddingBottom: paddingBottom + PANEL_PAD }]}
       renderItem={({ item, index }) => (
-        <Pressable onPress={() => onPressItem(index)} style={styles.cellWrapper}>
-          <GridCell item={item} size={cellSize} />
+        <Pressable onPress={() => onPressItem(index)}>
+          <GridCell item={item} width={cellWidth} height={cellHeight} />
         </Pressable>
       )}
       windowSize={5}
@@ -53,25 +60,34 @@ export function Grid({
 
 const GridCell = memo(function GridCell({
   item,
-  size,
+  width,
+  height,
 }: {
   item: NearbyAsset;
-  size: number;
+  width: number;
+  height: number;
 }) {
   const isVideo = item.mediaType === MediaType.VIDEO;
   const meta = useAssetMetadata(Platform.OS === 'ios' ? null : item.asset);
   const thumbnailUri = Platform.OS === 'ios' ? item.asset.id : meta?.uri;
+  // Landscape photos are letterboxed (contain) on #000 inside the 3:4 cell;
+  // everything else fills it (cover).
+  const [isLandscape, setIsLandscape] = useState(false);
 
   return (
-    <View style={[styles.cell, { width: size, height: size }]}>
+    <View style={[styles.cell, { width, height }]}>
       {thumbnailUri ? (
         <Image
           source={{ uri: thumbnailUri }}
           style={styles.image}
-          contentFit="cover"
+          contentFit={isLandscape ? 'contain' : 'cover'}
           cachePolicy="memory-disk"
           transition={0}
           recyclingKey={item.asset.id}
+          onLoad={(e) => {
+            const { width: w, height: h } = e.source ?? {};
+            if (w && h) setIsLandscape(w > h);
+          }}
         />
       ) : null}
       {isVideo ? (
@@ -89,17 +105,21 @@ const GridCell = memo(function GridCell({
 });
 
 const styles = StyleSheet.create({
+  panel: {
+    flex: 1,
+    marginHorizontal: FrameMargin,
+    backgroundColor: Letterbox,
+  },
   row: {
     gap: GAP,
   },
   content: {
+    paddingHorizontal: PANEL_PAD,
+    paddingTop: PANEL_PAD,
     gap: GAP,
   },
-  cellWrapper: {
-    backgroundColor: '#111',
-  },
   cell: {
-    backgroundColor: '#1a1a1a',
+    backgroundColor: Letterbox,
     overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',

@@ -63,3 +63,15 @@ export const Spacing = {
 
 export const BottomTabInset = Platform.select({ ios: 50, android: 80 }) ?? 0;
 export const MaxContentWidth = 800;
+
+// ── Design system ──────────────────────────────────────────────────────────
+// Light "gallery" look: photos framed on white, Archivo Expanded Black type.
+export const Paper = '#FFFFFF'; // app canvas
+export const Ink = '#111111'; // text, borders — every black EXCEPT the letterbox
+export const Letterbox = '#000000'; // fill behind a contained (landscape) photo
+export const DisplayFont = 'ArchivoExpanded-Black'; // see assets/fonts + _layout useFonts
+
+// Every framed photo is cropped/letterboxed to this ratio (768 × 1024).
+export const PhotoRatio = 768 / 1024; // width / height = 0.75
+export const FrameMargin = 10; // side gutter around the single-photo frame / grid panel
+export const HeaderHeight = 32; // CAMERA ROLL / NEAR ME bar height

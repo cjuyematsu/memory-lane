@@ -9,7 +9,7 @@ import { ClusterView } from '@/components/near-me/cluster-view';
 import { Grid } from '@/components/near-me/grid';
 import { Viewer } from '@/components/near-me/viewer';
 import { SettingsSheet } from '@/components/notifications/settings-sheet';
-import { Colors, BottomTabInset } from '@/constants/theme';
+import { BottomTabInset, DisplayFont, FrameMargin, Ink, Paper } from '@/constants/theme';
 import { setPendingCluster, usePendingCluster } from '@/lib/pending-cluster';
 import { useAssetFeed } from '@/hooks/use-asset-feed';
 import { useCurrentLocation } from '@/hooks/use-current-location';
@@ -53,18 +53,16 @@ export function NearMe({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const pendingCluster = usePendingCluster();
 
+  // Floats at the top-right of the dark grid panel (below the nav so it can't
+  // collide with the NEAR ME label); white on a dark pill so it reads on both
+  // the panel and any photo.
   const notificationsButton = (
-    <SafeAreaView
-      style={styles.notificationsWrap}
-      edges={['top']}
-      pointerEvents="box-none">
-      <Pressable
-        onPress={() => setSettingsOpen(true)}
-        style={styles.notificationsBtn}
-        hitSlop={12}>
-        <BellIcon width={20} height={20} fill="#fff" />
-      </Pressable>
-    </SafeAreaView>
+    <Pressable
+      onPress={() => setSettingsOpen(true)}
+      style={[styles.notificationsBtn, { top: gridPaddingTop + 6, right: FrameMargin + 6 }]}
+      hitSlop={12}>
+      <BellIcon width={18} height={18} fill={Paper} />
+    </Pressable>
   );
 
   const settingsSheet = (
@@ -74,7 +72,7 @@ export function NearMe({
   if (!mediaPermission) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator color="#fff" />
+        <ActivityIndicator color={Ink} />
       </View>
     );
   }
@@ -127,7 +125,7 @@ export function NearMe({
     ) {
       return (
         <View style={styles.center}>
-          <ActivityIndicator color="#fff" />
+          <ActivityIndicator color={Ink} />
         </View>
       );
     }
@@ -166,7 +164,7 @@ export function NearMe({
       </SafeAreaView>
     ) : (
       <View style={styles.center}>
-        <ActivityIndicator color="#fff" />
+        <ActivityIndicator color={Ink} />
       </View>
     );
   })();
@@ -175,10 +173,10 @@ export function NearMe({
     <View style={styles.container}>
       {body}
 
-      {viewerIndex !== null && (
+      {viewerIndex !== null && items.length > 0 && (
         <Viewer
           items={items}
-          startIndex={Math.min(viewerIndex, items.length - 1)}
+          startIndex={Math.max(0, Math.min(viewerIndex, items.length - 1))}
           isActive={isActive}
           onClose={() => setViewerIndex(null)}
           onOpenMemoryFeed={onOpenMemoryFeed}
@@ -208,23 +206,25 @@ export function NearMe({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.dark.background,
+    backgroundColor: Paper,
   },
   center: {
     flex: 1,
-    backgroundColor: Colors.dark.background,
+    backgroundColor: Paper,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 16,
     paddingHorizontal: 24,
   },
   title: {
-    color: '#fff',
-    fontSize: 36,
-    fontWeight: '600',
+    fontFamily: DisplayFont,
+    color: Ink,
+    fontSize: 32,
+    textTransform: 'uppercase',
+    textAlign: 'center',
   },
   body: {
-    color: '#fff',
+    color: Ink,
     fontSize: 15,
     textAlign: 'center',
   },
@@ -232,10 +232,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingVertical: 12,
     borderRadius: 32,
-    backgroundColor: Colors.dark.backgroundElement,
+    backgroundColor: Ink,
   },
   buttonLabel: {
-    color: '#fff',
+    color: Paper,
     fontWeight: '700',
   },
   empty: {
@@ -246,24 +246,24 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   emptyTitle: {
-    color: '#fff',
+    fontFamily: DisplayFont,
+    color: Ink,
     fontSize: 22,
-    fontWeight: '600',
+    textTransform: 'uppercase',
   },
   emptySub: {
-    color: Colors.dark.textSecondary,
+    color: '#777',
     fontSize: 14,
     textAlign: 'center',
   },
-  notificationsWrap: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    zIndex: 10,
-  },
   notificationsBtn: {
-    margin: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
+    position: 'absolute',
+    zIndex: 10,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.5)',
   },
 });

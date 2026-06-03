@@ -10,7 +10,7 @@ import {
   useWindowDimensions,
   type ViewToken,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -23,9 +23,10 @@ import { Image } from 'expo-image';
 import { Asset, usePermissions } from 'expo-media-library';
 
 import ShuffleIcon from '@/assets/icons/shuffle.svg';
-import { FeedCard, FEED_CAPTION_HEIGHT } from '@/components/feed/feed-card';
+import { FeedCard } from '@/components/feed/feed-card';
 import { FeedCardEventsContext, type FeedCardEvents } from '@/components/feed/feed-context';
-import { Colors } from '@/constants/theme';
+import { PhotoFrame, frameHeight, frameTop } from '@/components/feed/photo-frame';
+import { DisplayFont, Ink, Paper } from '@/constants/theme';
 import { useAssetFeed } from '@/hooks/use-asset-feed';
 import {
   getCachedMetadata,
@@ -48,6 +49,37 @@ function warmAsset(asset: Asset) {
     .catch(() => {});
 }
 
+// The framed photo used by the splash (memory-feed entry) and the shuffle
+// crossfade. Tracks its own landscape flag so it letterboxes the same way the
+// live card does; positioned at the shared frameTop so nothing shifts on
+// handoff.
+function OverlayFramedPhoto({
+  uri,
+  screenW,
+  top,
+}: {
+  uri: string;
+  screenW: number;
+  top: number;
+}) {
+  const [isLandscape, setIsLandscape] = useState(false);
+  return (
+    <PhotoFrame screenW={screenW} top={top}>
+      <Image
+        source={{ uri }}
+        style={StyleSheet.absoluteFill}
+        contentFit={isLandscape ? 'contain' : 'cover'}
+        cachePolicy="memory-disk"
+        transition={0}
+        onLoad={(e) => {
+          const { width: w, height: h } = e.source ?? {};
+          if (w && h) setIsLandscape(w > h);
+        }}
+      />
+    </PhotoFrame>
+  );
+}
+
 export function Feed({
   startAssetId,
   rememberLastPosition = true,
@@ -63,6 +95,7 @@ export function Feed({
   const granted = !!permission?.granted;
   const { state, reload } = useAssetFeed(granted);
   const window = useWindowDimensions();
+  const insets = useSafeAreaInsets();
 
   const [layout, setLayout] = useState({ width: window.width, height: window.height });
   const [layoutMeasured, setLayoutMeasured] = useState(false);
@@ -307,7 +340,7 @@ export function Feed({
   if (!permission) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator color="#fff" />
+        <ActivityIndicator color={Ink} />
       </View>
     );
   }
@@ -342,25 +375,17 @@ export function Feed({
       }}>
       {splash && splashLatched && (isLoading || isReady) ? (
         <View style={StyleSheet.absoluteFill} pointerEvents="none">
-          <View
-            style={[
-              styles.splashMedia,
-              { height: Math.max(0, layout.height - FEED_CAPTION_HEIGHT) },
-            ]}>
-            <Image
-              source={{ uri: splash.uri }}
-              style={StyleSheet.absoluteFill}
-              contentFit="contain"
-              cachePolicy="memory-disk"
-              transition={0}
-            />
-          </View>
+          <OverlayFramedPhoto
+            uri={splash.uri}
+            screenW={layout.width}
+            top={frameTop(insets.top)}
+          />
         </View>
       ) : null}
 
       {isLoading && (!splash || !splashLatched) ? (
         <View style={styles.center}>
-          <ActivityIndicator color="#fff" />
+          <ActivityIndicator color={Ink} />
         </View>
       ) : null}
 
@@ -414,27 +439,26 @@ export function Feed({
       ) : null}
 
       {outgoingAssetId ? (
-        <Animated.View
-          style={[
-            styles.crossfadeOverlay,
-            { height: Math.max(0, layout.height - FEED_CAPTION_HEIGHT) },
-            overlayStyle,
-          ]}
-          pointerEvents="none">
-          <Image
-            source={{ uri: outgoingAssetId }}
-            style={StyleSheet.absoluteFill}
-            contentFit="contain"
-            cachePolicy="memory-disk"
-            transition={0}
+        <Animated.View style={[styles.crossfadeOverlay, overlayStyle]} pointerEvents="none">
+          <OverlayFramedPhoto
+            uri={outgoingAssetId}
+            screenW={layout.width}
+            top={frameTop(insets.top)}
           />
         </Animated.View>
       ) : null}
 
       {isReady && showShuffle ? (
-        <View style={styles.shuffleWrapper} pointerEvents="box-none">
+        <View
+          style={[
+            styles.shuffleWrapper,
+            // Centered in the empty band between the caption and the screen
+            // bottom (frame bottom + the ~caption block height).
+            { top: frameTop(insets.top) + frameHeight(layout.width) + 80 },
+          ]}
+          pointerEvents="box-none">
           <Pressable style={styles.shuffle} onPress={shuffle} hitSlop={12}>
-            <ShuffleIcon width={28} height={28} fill="#fff" />
+            <ShuffleIcon width={26} height={26} color={Ink} />
           </Pressable>
         </View>
       ) : null}
@@ -445,23 +469,24 @@ export function Feed({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#000',
+    backgroundColor: Paper,
   },
   center: {
     flex: 1,
-    backgroundColor: Colors.dark.background,
+    backgroundColor: Paper,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 16,
     paddingHorizontal: 24,
   },
   title: {
-    color: '#fff',
-    fontSize: 48,
-    fontWeight: '600',
+    fontFamily: DisplayFont,
+    fontSize: 40,
+    color: Ink,
+    textTransform: 'uppercase',
   },
   body: {
-    color: '#fff',
+    color: Ink,
     fontSize: 16,
     textAlign: 'center',
   },
@@ -469,35 +494,33 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingVertical: 12,
     borderRadius: 32,
-    backgroundColor: Colors.dark.backgroundElement,
+    backgroundColor: Ink,
   },
   buttonLabel: {
-    color: '#fff',
+    color: Paper,
     fontWeight: '700',
   },
   shuffleWrapper: {
     position: 'absolute',
+    left: 0,
     right: 0,
     bottom: 0,
-    height: FEED_CAPTION_HEIGHT,
-    paddingTop: 2,
-    paddingRight: 20,
+    // vertically centered in the band below the caption (top set inline),
+    // horizontally on the right where it was
     alignItems: 'flex-end',
+    justifyContent: 'center',
+    paddingRight: 24,
   },
   shuffle: {
-    padding: 6,
+    padding: 8,
   },
+  // Full-screen white behind the dissolving framed photo so the card swap is hidden.
   crossfadeOverlay: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
-    backgroundColor: '#000',
-  },
-  splashMedia: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
+    bottom: 0,
+    backgroundColor: Paper,
   },
 });

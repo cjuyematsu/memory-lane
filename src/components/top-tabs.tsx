@@ -18,6 +18,7 @@ import { scheduleOnRN } from 'react-native-worklets';
 
 import { Feed } from '@/components/feed/feed';
 import { NearMe } from '@/components/near-me/near-me';
+import { DisplayFont, Ink, Paper } from '@/constants/theme';
 import { usePendingCluster } from '@/lib/pending-cluster';
 
 type Tab = 'cameraRoll' | 'nearMe';
@@ -169,15 +170,20 @@ export function TopTabs() {
 
       {!memoryEntry && !pendingCluster ? (
         <SafeAreaView edges={['top']} style={styles.barWrap} pointerEvents="box-none">
-          <View style={styles.bar} pointerEvents="auto">
-            <Pressable onPress={() => setTab('cameraRoll')} hitSlop={10}>
-              <Text style={[styles.label, tab === 'cameraRoll' && styles.labelActive]}>
+          <View style={[styles.bar, { width }]} pointerEvents="auto">
+            <Pressable style={styles.tabLeft} onPress={() => setTab('cameraRoll')} hitSlop={10}>
+              <Text
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                style={[styles.label, tab === 'cameraRoll' && styles.labelActive]}>
                 CAMERA ROLL
               </Text>
             </Pressable>
-            <View style={styles.sep} />
-            <Pressable onPress={() => setTab('nearMe')} hitSlop={10}>
-              <Text style={[styles.label, tab === 'nearMe' && styles.labelActive]}>
+            <Pressable style={styles.tabRight} onPress={() => setTab('nearMe')} hitSlop={10}>
+              <Text
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                style={[styles.label, styles.labelRight, tab === 'nearMe' && styles.labelActive]}>
                 NEAR ME
               </Text>
             </Pressable>
@@ -191,7 +197,7 @@ export function TopTabs() {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: '#000',
+    backgroundColor: Paper,
     overflow: 'hidden',
   },
   pager: {
@@ -200,39 +206,44 @@ const styles = StyleSheet.create({
   },
   overlay: {
     zIndex: 5,
-    backgroundColor: '#000',
+    backgroundColor: Paper,
   },
   barWrap: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
-    alignItems: 'center',
+    alignItems: 'stretch',
     zIndex: 10,
   },
   bar: {
+    // Explicit full screen width (set inline) so the labels measure against the
+    // real width and the space-between gap is real.
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 14,
-    paddingHorizontal: 16,
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
     paddingVertical: 10,
   },
+  // Each label fills its box (adjustsFontSizeToFit). The box widths are the
+  // size dial: smaller % → smaller labels + bigger center gap. The 18px below
+  // is just the ceiling — the labels render at whatever fills the box.
+  tabLeft: {
+    width: '32%',
+  },
+  tabRight: {
+    width: '20%',
+  },
   label: {
-    color: 'rgba(255,255,255,0.45)',
-    fontSize: 13,
-    fontWeight: '700',
-    letterSpacing: 1.2,
-    textShadowColor: 'rgba(0,0,0,0.6)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 4,
+    fontFamily: DisplayFont,
+    color: Ink,
+    fontSize: 18,
+  },
+  labelRight: {
+    textAlign: 'right',
   },
   labelActive: {
-    color: '#fff',
-  },
-  sep: {
-    width: 1,
-    height: 14,
-    backgroundColor: 'rgba(255,255,255,0.35)',
+    textDecorationLine: 'underline',
   },
   backWrap: {
     position: 'absolute',
@@ -241,16 +252,14 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
   backBtn: {
-    margin: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+    marginTop: 0,
+    marginLeft: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 1,
   },
   backLabel: {
-    color: '#fff',
-    fontSize: 28,
+    color: Ink,
+    fontSize: 30,
     fontWeight: '600',
-    textShadowColor: 'rgba(0,0,0,0.6)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 4,
   },
 });
