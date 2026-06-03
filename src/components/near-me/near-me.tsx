@@ -1,8 +1,6 @@
 import { useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-
-import { usePermissions } from 'expo-media-library';
 
 import BellIcon from '@/assets/icons/bell.svg';
 import { ClusterView } from '@/components/near-me/cluster-view';
@@ -13,6 +11,7 @@ import { BottomTabInset, DisplayFont, FrameMargin, Ink, Paper } from '@/constant
 import { setPendingCluster, usePendingCluster } from '@/lib/pending-cluster';
 import { useAssetFeed } from '@/hooks/use-asset-feed';
 import { useCurrentLocation } from '@/hooks/use-current-location';
+import { useMediaPermission } from '@/hooks/use-media-permission';
 import {
   refreshNearby,
   useNearbyAssets,
@@ -30,7 +29,7 @@ export function NearMe({
 } = {}) {
   const insets = useSafeAreaInsets();
   const gridPaddingTop = insets.top + TAB_BAR_HEIGHT + 8;
-  const [mediaPermission, requestMediaPermission] = usePermissions();
+  const [mediaPermission, requestMediaPermission] = useMediaPermission();
   const granted = !!mediaPermission?.granted;
   const { state: feedState, reload: reloadFeed } = useAssetFeed(granted);
   const { state: locationState, refresh: refreshLocation } = useCurrentLocation();
@@ -78,12 +77,16 @@ export function NearMe({
   }
 
   if (!mediaPermission.granted) {
+    // Once denied, requestMediaPermission() is a silent no-op — send to Settings.
+    const canAsk = mediaPermission.canAskAgain;
     return (
       <SafeAreaView style={styles.center}>
         <Text style={styles.title}>Near Me</Text>
         <Text style={styles.body}>We need access to your photos.</Text>
-        <Pressable style={styles.button} onPress={requestMediaPermission}>
-          <Text style={styles.buttonLabel}>Grant access</Text>
+        <Pressable
+          style={styles.button}
+          onPress={() => (canAsk ? requestMediaPermission() : Linking.openSettings())}>
+          <Text style={styles.buttonLabel}>{canAsk ? 'Grant access' : 'Open Settings'}</Text>
         </Pressable>
       </SafeAreaView>
     );
@@ -224,6 +227,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   body: {
+    fontFamily: DisplayFont,
     color: Ink,
     fontSize: 15,
     textAlign: 'center',
@@ -235,6 +239,7 @@ const styles = StyleSheet.create({
     backgroundColor: Ink,
   },
   buttonLabel: {
+    fontFamily: DisplayFont,
     color: Paper,
     fontWeight: '700',
   },

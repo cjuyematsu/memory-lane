@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  Linking,
   Platform,
   Pressable,
   StyleSheet,
@@ -20,7 +21,7 @@ import Animated, {
 import { scheduleOnRN } from 'react-native-worklets';
 
 import { Image } from 'expo-image';
-import { Asset, usePermissions } from 'expo-media-library';
+import { Asset } from 'expo-media-library';
 
 import ShuffleIcon from '@/assets/icons/shuffle.svg';
 import { FeedCard } from '@/components/feed/feed-card';
@@ -32,6 +33,7 @@ import {
   getCachedMetadata,
   hydrateAsset,
 } from '@/hooks/use-asset-metadata';
+import { useMediaPermission } from '@/hooks/use-media-permission';
 import { prefetchReverseGeocode } from '@/hooks/use-reverse-geocode';
 
 let rememberedAssetId: string | null = null;
@@ -91,7 +93,7 @@ export function Feed({
   showShuffle?: boolean;
   isActive?: boolean;
 } = {}) {
-  const [permission, requestPermission] = usePermissions();
+  const [permission, requestPermission] = useMediaPermission();
   const granted = !!permission?.granted;
   const { state, reload } = useAssetFeed(granted);
   const window = useWindowDimensions();
@@ -346,12 +348,16 @@ export function Feed({
   }
 
   if (!permission.granted) {
+    // Once denied, requestPermission() is a silent no-op — send them to Settings.
+    const canAsk = permission.canAskAgain;
     return (
       <SafeAreaView style={styles.center}>
         <Text style={styles.title}>Mems</Text>
         <Text style={styles.body}>We need access to your photos.</Text>
-        <Pressable style={styles.button} onPress={requestPermission}>
-          <Text style={styles.buttonLabel}>Grant access</Text>
+        <Pressable
+          style={styles.button}
+          onPress={() => (canAsk ? requestPermission() : Linking.openSettings())}>
+          <Text style={styles.buttonLabel}>{canAsk ? 'Grant access' : 'Open Settings'}</Text>
         </Pressable>
       </SafeAreaView>
     );
@@ -486,6 +492,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   body: {
+    fontFamily: DisplayFont,
     color: Ink,
     fontSize: 16,
     textAlign: 'center',
@@ -497,6 +504,7 @@ const styles = StyleSheet.create({
     backgroundColor: Ink,
   },
   buttonLabel: {
+    fontFamily: DisplayFont,
     color: Paper,
     fontWeight: '700',
   },

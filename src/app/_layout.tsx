@@ -12,15 +12,19 @@ export default function RootLayout() {
   // Archivo Expanded Black. The key is the family name referenced as
   // `DisplayFont` in the type system; loaded at runtime so no rebuild is needed.
   // Drop the file at assets/fonts/ArchivoExpanded-Black.ttf (see README there).
-  useFonts({
+  const [fontsLoaded, fontError] = useFonts({
     'ArchivoExpanded-Black': require('@/assets/fonts/ArchivoExpanded-Black.ttf'),
   });
+  // Hold the content until the font is ready so the first paint already uses it
+  // (otherwise the nav flashes the fallback font until something re-renders).
+  // `|| fontError` so a load failure still shows the app (with the fallback).
+  const ready = fontsLoaded || !!fontError;
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
         <AnimatedSplashOverlay />
         <NotificationOrchestrator />
-        <Slot />
+        {ready ? <Slot /> : null}
         <MemoryBanner />
       </ThemeProvider>
     </GestureHandlerRootView>
