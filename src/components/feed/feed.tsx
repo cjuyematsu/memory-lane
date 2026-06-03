@@ -41,6 +41,7 @@ const SHUFFLE_QUEUE_SIZE = 4;
 const SHUFFLE_PREFETCH_TIMEOUT_MS = 600;
 const CROSSFADE_DURATION_MS = 280;
 const CARD_READY_TIMEOUT_MS = 1500;
+const OVERLAY_READY_TIMEOUT_MS = 600;
 
 function warmAsset(asset: Asset) {
   Image.prefetch(asset.id).catch(() => {});
@@ -59,10 +60,12 @@ function OverlayFramedPhoto({
   uri,
   screenW,
   top,
+  onReady,
 }: {
   uri: string;
   screenW: number;
   top: number;
+  onReady?: () => void;
 }) {
   const [isLandscape, setIsLandscape] = useState(false);
   return (
@@ -76,7 +79,9 @@ function OverlayFramedPhoto({
         onLoad={(e) => {
           const { width: w, height: h } = e.source ?? {};
           if (w && h) setIsLandscape(w > h);
+          onReady?.();
         }}
+        onError={() => onReady?.()}
       />
     </PhotoFrame>
   );
@@ -105,6 +110,7 @@ export function Feed({
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [shuffleQueue, setShuffleQueue] = useState<string[]>([]);
   const [outgoingAssetId, setOutgoingAssetId] = useState<string | null>(null);
+  const [overlayPainted, setOverlayPainted] = useState(false);
   const [splashLatched, setSplashLatched] = useState(true);
   const listRef = useRef<FlatList<Asset>>(null);
   const fadeOpacity = useSharedValue(0);
@@ -140,6 +146,11 @@ export function Feed({
   const overlayStyle = useAnimatedStyle(() => ({
     opacity: fadeOpacity.value,
   }));
+
+  const finishCrossfade = useCallback(() => {
+    setOutgoingAssetId(null);
+    setOverlayPainted(false);
+  }, []);
 
   const assets = state.status === 'ready' ? state.assets : [];
 
@@ -255,15 +266,17 @@ export function Feed({
     const willCrossfade = prevId != null && prevId !== pickedId;
 
     if (willCrossfade) {
-      // Stage the destination but DON'T scroll yet. The useEffect below
-      // fires after the overlay has actually committed/painted, then it
-      // performs the scroll and wires up the card-ready handler. This is
-      // a hard guarantee that the FlatList doesn't move under the user
-      // until the overlay is on screen — RAF-based timing was unreliable
-      // on Android.
+      // Stage the destination but DON'T scroll yet. The overlay mounts
+      // transparent over the (identical) current photo, so there's no black
+      // photo-frame flash while its image decodes. Once the overlay image
+      // actually paints (onReady -> overlayPainted), the effect below snaps
+      // it opaque, scrolls the list underneath, then crossfades to the new
+      // card. Gating on the real paint — not a bare RAF after commit — is
+      // what stops the list swap from leaking through.
       pendingShuffleRef.current = { pickedId, newIdx };
+      setOverlayPainted(false);
+      fadeOpacity.value = 0;
       setOutgoingAssetId(prevId);
-      fadeOpacity.value = 1;
       return;
     }
 
@@ -273,45 +286,67 @@ export function Feed({
     listRef.current?.scrollToIndex({ index: newIdx, animated: false });
   }, [assets, currentId, fadeOpacity, rememberLastPosition, shuffleQueue]);
 
-  // Once the overlay is on screen (state has committed + painted), commit
-  // the scroll and set up the card-ready handler that drives the fade-out.
+  // Drive the crossfade only once the overlay's image has actually painted
+  // (overlayPainted, set from the overlay Image's onLoad/onError or the
+  // safety timeout below). Snap the overlay opaque, then over the next two
+  // frames scroll the list to the new photo while it's hidden and wire up the
+  // card-ready handler that drives the fade-out. Gating on the real paint —
+  // not a bare RAF after commit — is what keeps the list swap from flashing
+  // through, and starting transparent avoids the black photo-frame flash.
   useEffect(() => {
-    if (!outgoingAssetId) return;
+    if (!outgoingAssetId || !overlayPainted) return;
     const pending = pendingShuffleRef.current;
     if (!pending) return;
     pendingShuffleRef.current = null;
 
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const rafId = requestAnimationFrame(() => {
-      setCurrentId(pending.pickedId);
-      if (rememberLastPosition) rememberedAssetId = pending.pickedId;
-      listRef.current?.scrollToIndex({ index: pending.newIdx, animated: false });
+    fadeOpacity.value = 1;
 
-      let fired = false;
-      const startFadeOut = () => {
-        if (fired) return;
-        fired = true;
-        cardReadyHandlerRef.current = () => {};
-        fadeOpacity.value = withTiming(
-          0,
-          { duration: CROSSFADE_DURATION_MS, easing: Easing.out(Easing.cubic) },
-          (finished) => {
-            'worklet';
-            if (finished) scheduleOnRN(setOutgoingAssetId, null);
-          }
-        );
-      };
-      cardReadyHandlerRef.current = (readyId) => {
-        if (readyId === pending.pickedId) startFadeOut();
-      };
-      timer = setTimeout(startFadeOut, CARD_READY_TIMEOUT_MS);
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let innerRaf = 0;
+    // Two frames so the opacity snap is on screen before the list moves;
+    // otherwise the scroll could land a frame ahead of the cover.
+    const outerRaf = requestAnimationFrame(() => {
+      innerRaf = requestAnimationFrame(() => {
+        setCurrentId(pending.pickedId);
+        if (rememberLastPosition) rememberedAssetId = pending.pickedId;
+        listRef.current?.scrollToIndex({ index: pending.newIdx, animated: false });
+
+        let fired = false;
+        const startFadeOut = () => {
+          if (fired) return;
+          fired = true;
+          cardReadyHandlerRef.current = () => {};
+          fadeOpacity.value = withTiming(
+            0,
+            { duration: CROSSFADE_DURATION_MS, easing: Easing.out(Easing.cubic) },
+            (finished) => {
+              'worklet';
+              if (finished) scheduleOnRN(finishCrossfade);
+            }
+          );
+        };
+        cardReadyHandlerRef.current = (readyId) => {
+          if (readyId === pending.pickedId) startFadeOut();
+        };
+        timer = setTimeout(startFadeOut, CARD_READY_TIMEOUT_MS);
+      });
     });
 
     return () => {
-      cancelAnimationFrame(rafId);
+      cancelAnimationFrame(outerRaf);
+      cancelAnimationFrame(innerRaf);
       if (timer) clearTimeout(timer);
     };
-  }, [outgoingAssetId, rememberLastPosition, fadeOpacity]);
+  }, [outgoingAssetId, overlayPainted, rememberLastPosition, fadeOpacity, finishCrossfade]);
+
+  // Safety net: if the overlay image never reports ready (slow/failed load),
+  // force the crossfade forward after a beat so a shuffle can't hang with an
+  // invisible overlay and a list that never scrolls.
+  useEffect(() => {
+    if (!outgoingAssetId || overlayPainted) return;
+    const t = setTimeout(() => setOverlayPainted(true), OVERLAY_READY_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [outgoingAssetId, overlayPainted]);
 
   useEffect(() => {
     if (!currentId || assets.length === 0) return;
@@ -450,6 +485,7 @@ export function Feed({
             uri={outgoingAssetId}
             screenW={layout.width}
             top={frameTop(insets.top)}
+            onReady={() => setOverlayPainted(true)}
           />
         </Animated.View>
       ) : null}
