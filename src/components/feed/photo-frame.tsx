@@ -3,7 +3,7 @@ import { StyleSheet, View } from 'react-native';
 
 import { FrameMargin, HeaderHeight, Letterbox, PhotoRatio } from '@/constants/theme';
 
-const HEADER_GAP = 6; // breathing room between the nav and the framed photo
+const HEADER_GAP = 16;
 
 /** Y offset of the frame: clears the safe area + nav bar. Shared so the live
  *  card and its splash/crossfade overlays line up exactly. */
