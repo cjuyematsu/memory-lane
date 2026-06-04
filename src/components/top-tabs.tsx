@@ -37,6 +37,7 @@ export function TopTabs() {
   const { width } = useWindowDimensions();
   const [tab, setTab] = useState<Tab>('cameraRoll');
   const [memoryEntry, setMemoryEntry] = useState<string | null>(null);
+  const [nearMeViewerOpen, setNearMeViewerOpen] = useState(false);
 
   const tabX = useSharedValue(0);
   const overlayX = useSharedValue(width);
@@ -76,7 +77,7 @@ export function TopTabs() {
     // Disabled while a memory feed or the notification cluster view is open,
     // so you can't swipe between tabs to escape memories — you must back out
     // of the memory view first (and out of any open photo before that).
-    .enabled(memoryEntry == null && !pendingCluster)
+    .enabled(memoryEntry == null && !pendingCluster && !nearMeViewerOpen)
     .activeOffsetX([-15, 15])
     .failOffsetY([-20, 20])
     .onUpdate((e) => {
@@ -142,6 +143,7 @@ export function TopTabs() {
             <NearMe
               isActive={nearMeActive}
               onOpenMemoryFeed={(assetId) => setMemoryEntry(assetId)}
+              onViewerOpenChange={setNearMeViewerOpen}
             />
           </View>
         </Animated.View>
@@ -168,7 +170,7 @@ export function TopTabs() {
         </Animated.View>
       </GestureDetector>
 
-      {!memoryEntry && !pendingCluster ? (
+      {!memoryEntry && !pendingCluster && !nearMeViewerOpen ? (
         <SafeAreaView edges={['top']} style={styles.barWrap} pointerEvents="box-none">
           <View style={[styles.bar, { width }]} pointerEvents="auto">
             <Pressable style={styles.tabLeft} onPress={() => setTab('cameraRoll')} hitSlop={10}>

@@ -4,7 +4,7 @@ import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { Asset, MediaType } from 'expo-media-library';
 
 import { Viewer } from '@/components/near-me/viewer';
-import { Colors } from '@/constants/theme';
+import { DisplayFont, Ink, Paper } from '@/constants/theme';
 import { getIndex } from '@/hooks/use-located-assets';
 import { loadClustersFromDisk, type PhotoCluster } from '@/hooks/use-photo-clusters';
 import type { NearbyAsset } from '@/hooks/use-nearby-assets';
@@ -75,7 +75,7 @@ export function ClusterView({
     <View style={styles.overlay}>
       {!ready ? (
         <View style={styles.center}>
-          <ActivityIndicator color="#fff" />
+          <ActivityIndicator color={Ink} />
         </View>
       ) : items.length === 0 ? (
         <View style={styles.center}>
@@ -114,10 +114,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 24,
-    backgroundColor: Colors.dark.background,
+    backgroundColor: Paper,
   },
   empty: {
-    color: Colors.dark.textSecondary,
+    fontFamily: DisplayFont,
+    color: Ink,
     fontSize: 15,
     textAlign: 'center',
   },

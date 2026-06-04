@@ -9,7 +9,7 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Image } from 'expo-image';
 import { MediaType } from 'expo-media-library';
@@ -25,6 +25,8 @@ import Animated, {
 import { scheduleOnRN } from 'react-native-worklets';
 
 import FilmIcon from '@/assets/icons/film.svg';
+import { PhotoFrame, frameTop } from '@/components/feed/photo-frame';
+import { DisplayFont, FrameMargin, Ink, Paper, PhotoRatio } from '@/constants/theme';
 import { useAssetMetadata, usePlaybackUri } from '@/hooks/use-asset-metadata';
 import { useReverseGeocode } from '@/hooks/use-reverse-geocode';
 import type { NearbyAsset } from '@/hooks/use-nearby-assets';
@@ -33,6 +35,15 @@ import { formatTimeAgo } from '@/utils/time-ago';
 const THUMB_SIZE = 56;
 const THUMB_GAP = 6;
 const DISMISS_THRESHOLD = 120;
+
+// Vertical space (above the safe-area inset) reserved at the bottom for each
+// mode's chrome, plus the space the caption needs below the frame. The frame
+// is sized to fill whatever is left, so it stays inside the screen on every
+// device instead of being a fixed full-width 3:4 box that can overrun short
+// phones.
+const FILMSTRIP_CHROME = 132; // film button + filmstrip thumbs + paddings
+const STORY_CHROME = 24; // memories mode has no filmstrip, just breathing room
+const CAPTION_RESERVE = 104; // gap + time-ago + place line(s) below the frame
 
 export function Viewer({
   items,
@@ -158,6 +169,7 @@ export function Viewer({
                 isActive={isActive}
                 width={width}
                 height={height}
+                bottomChrome={tapToAdvance ? STORY_CHROME : FILMSTRIP_CHROME}
               />
             )}
             extraData={index}
@@ -223,7 +235,7 @@ export function Viewer({
                       onPress={() => onOpenMemoryFeed(items[index].asset.id)}
                       style={styles.filmBtn}
                       hitSlop={12}>
-                      <FilmIcon width={28} height={28} fill="#fff" />
+                      <FilmIcon width={28} height={28} color={Ink} />
                     </Pressable>
                   </View>
                 ) : null}
@@ -256,37 +268,66 @@ const ViewerPage = memo(function ViewerPage({
   isActive,
   width,
   height,
+  bottomChrome,
 }: {
   item: NearbyAsset;
   isCurrent: boolean;
   isActive: boolean;
   width: number;
   height: number;
+  bottomChrome: number;
 }) {
+  const insets = useSafeAreaInsets();
   const placeName = useReverseGeocode(item.location);
   const isVideo = item.mediaType === MediaType.VIDEO;
   const playbackUri = usePlaybackUri(isVideo && isCurrent ? item.asset : null);
   const meta = useAssetMetadata(Platform.OS === 'ios' ? null : item.asset);
   const thumbnailUri = Platform.OS === 'ios' ? item.asset.id : meta?.uri;
 
+  // Same framed look as the Camera Roll feed: the photo sits inside a black
+  // 3:4 frame on the white canvas, contained so the whole image is always
+  // visible (letterboxed by the frame's black fill), with the time-ago/place
+  // caption in Archivo Expanded Black below it. The frame is the largest 3:4
+  // box that fits between the header and the bottom chrome with room for the
+  // caption: on tall phones that's the full-width feed frame, and on short
+  // phones it shrinks and stays centered so nothing overlaps.
+  const top = frameTop(insets.top);
+  const available = Math.max(
+    0,
+    height - top - bottomChrome - insets.bottom - CAPTION_RESERVE
+  );
+  const maxFrameW = width - 2 * FrameMargin;
+  const frameH = Math.min(maxFrameW / PhotoRatio, available);
+  const frameW = frameH * PhotoRatio;
+  const frameLeft = (width - frameW) / 2;
+  const captionTop = top + frameH + 24;
+
   return (
-    <View style={{ width, height, backgroundColor: '#000' }}>
-      {thumbnailUri ? (
-        <Image
-          source={{ uri: thumbnailUri }}
-          style={StyleSheet.absoluteFill}
-          contentFit="contain"
-          cachePolicy="memory-disk"
-          transition={0}
-          recyclingKey={item.asset.id}
-        />
-      ) : null}
-      {isVideo && isCurrent && isActive && playbackUri ? (
-        <ViewerVideo uri={playbackUri} />
-      ) : null}
-      <View style={styles.gradient} pointerEvents="none" />
-      <View style={styles.overlay}>
-        <Text style={styles.timeAgo}>{formatTimeAgo(item.creationTime)}</Text>
+    <View style={{ width, height, backgroundColor: Paper }}>
+      <PhotoFrame screenW={width} top={top} width={frameW} height={frameH} left={frameLeft}>
+        {thumbnailUri ? (
+          <Image
+            source={{ uri: thumbnailUri }}
+            style={StyleSheet.absoluteFill}
+            contentFit="contain"
+            cachePolicy="memory-disk"
+            transition={0}
+            recyclingKey={item.asset.id}
+          />
+        ) : null}
+        {isVideo && isCurrent && isActive && playbackUri ? (
+          <ViewerVideo uri={playbackUri} />
+        ) : null}
+      </PhotoFrame>
+
+      <View style={[styles.caption, { top: captionTop }]} pointerEvents="none">
+        <Text
+          style={styles.timeAgo}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.4}>
+          {formatTimeAgo(item.creationTime)}
+        </Text>
         {placeName ? (
           <Text style={styles.place}>
             {item.isEstimated ? '~ ' : ''}
@@ -347,7 +388,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: '#000',
+    backgroundColor: Paper,
   },
   // Central tap band for story navigation; inset from the top (progress bars)
   // and bottom so controls keep their own taps.
@@ -378,7 +419,7 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 3,
     borderRadius: 2,
-    backgroundColor: 'rgba(255,255,255,0.3)',
+    backgroundColor: 'rgba(0,0,0,0.15)',
     overflow: 'hidden',
   },
   segFill: {
@@ -390,7 +431,7 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
     borderRadius: 2,
-    backgroundColor: '#fff',
+    backgroundColor: Ink,
   },
   storyClose: {
     alignSelf: 'flex-end',
@@ -405,16 +446,15 @@ const styles = StyleSheet.create({
     right: 0,
   },
   closeBtn: {
-    margin: 12,
+    marginTop: 2,
+    marginLeft: 12,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.45)',
     alignSelf: 'flex-start',
   },
   closeLabel: {
-    color: '#fff',
-    fontSize: 16,
+    color: Ink,
+    fontSize: 20,
     fontWeight: '600',
   },
   bottomBar: {
@@ -447,7 +487,7 @@ const styles = StyleSheet.create({
     borderColor: 'transparent',
   },
   thumbWrapActive: {
-    borderColor: '#fff',
+    borderColor: Ink,
   },
   thumb: {
     width: '100%',
@@ -473,35 +513,28 @@ const styles = StyleSheet.create({
     borderBottomColor: 'transparent',
     marginLeft: 2,
   },
-  gradient: {
+  // Time-ago + place below the frame, matching the feed caption.
+  caption: {
     position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: 220,
-    backgroundColor: 'rgba(0,0,0,0.35)',
-  },
-  overlay: {
-    position: 'absolute',
-    bottom: 160,
-    left: 20,
-    right: 20,
-    gap: 4,
+    left: FrameMargin,
+    right: FrameMargin,
+    alignItems: 'stretch',
   },
   timeAgo: {
-    color: '#fff',
-    fontSize: 26,
-    fontWeight: '700',
-    textShadowColor: 'rgba(0,0,0,0.6)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 6,
+    fontFamily: DisplayFont,
+    fontSize: 30,
+    color: Ink,
+    textTransform: 'uppercase',
+    textAlign: 'center',
   },
   place: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '500',
-    textShadowColor: 'rgba(0,0,0,0.6)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 6,
+    fontFamily: DisplayFont,
+    fontSize: 11,
+    lineHeight: 16,
+    color: Ink,
+    textTransform: 'uppercase',
+    textAlign: 'center',
+    letterSpacing: 0.5,
+    marginTop: 10,
   },
 });

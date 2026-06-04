@@ -1,13 +1,14 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import BellIcon from '@/assets/icons/bell.svg';
+import { frameTop } from '@/components/feed/photo-frame';
 import { ClusterView } from '@/components/near-me/cluster-view';
 import { Grid } from '@/components/near-me/grid';
 import { Viewer } from '@/components/near-me/viewer';
 import { SettingsSheet } from '@/components/notifications/settings-sheet';
-import { BottomTabInset, DisplayFont, FrameMargin, Ink, Paper } from '@/constants/theme';
+import { DisplayFont, FrameMargin, Ink, Paper } from '@/constants/theme';
 import { setPendingCluster, usePendingCluster } from '@/lib/pending-cluster';
 import { useAssetFeed } from '@/hooks/use-asset-feed';
 import { useCurrentLocation } from '@/hooks/use-current-location';
@@ -18,17 +19,21 @@ import {
   type NearbyAsset,
 } from '@/hooks/use-nearby-assets';
 
-const TAB_BAR_HEIGHT = 46;
-
 export function NearMe({
   isActive = true,
   onOpenMemoryFeed,
+  onViewerOpenChange,
 }: {
   isActive?: boolean;
   onOpenMemoryFeed?: (assetId: string) => void;
+  // Fires when a photo is opened/closed full-screen from the grid, so the
+  // parent can hide the top tabs (and disable tab swiping) for a clean view.
+  onViewerOpenChange?: (open: boolean) => void;
 } = {}) {
   const insets = useSafeAreaInsets();
-  const gridPaddingTop = insets.top + TAB_BAR_HEIGHT + 8;
+  // Align the grid's top with the Camera Roll photo frame so the side swipe
+  // between tabs lines up.
+  const gridPaddingTop = frameTop(insets.top);
   const [mediaPermission, requestMediaPermission] = useMediaPermission();
   const granted = !!mediaPermission?.granted;
   const { state: feedState, reload: reloadFeed } = useAssetFeed(granted);
@@ -51,6 +56,10 @@ export function NearMe({
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const pendingCluster = usePendingCluster();
+
+  useEffect(() => {
+    onViewerOpenChange?.(viewerIndex !== null);
+  }, [viewerIndex, onViewerOpenChange]);
 
   // Floats at the top-right of the dark grid panel (below the nav so it can't
   // collide with the NEAR ME label); white on a dark pill so it reads on both
@@ -150,7 +159,7 @@ export function NearMe({
         items={items}
         onPressItem={(i) => setViewerIndex(i)}
         paddingTop={gridPaddingTop}
-        paddingBottom={BottomTabInset + 24}
+        paddingBottom={insets.bottom}
       />
     ) : nearby.status === 'ready' ? (
       <SafeAreaView style={styles.empty}>
@@ -186,9 +195,9 @@ export function NearMe({
         />
       )}
 
-      {/* Hide the bell while memories are open (it would otherwise float over
-          the cluster overlay via its zIndex). */}
-      {!pendingCluster ? notificationsButton : null}
+      {/* Hide the bell while memories or a full-screen photo are open (it would
+          otherwise float over them via its zIndex). */}
+      {!pendingCluster && viewerIndex === null ? notificationsButton : null}
       {settingsSheet}
 
       {/* Memories cluster view: a tapped notification routes here. Rendered as
