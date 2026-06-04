@@ -25,20 +25,58 @@ export function frameHeight(screenW: number): number {
   return frameWidth(screenW) / PhotoRatio;
 }
 
+export type FrameLayout = { top: number; left: number; width: number; height: number };
+
+// The framed-photo geometry: the largest 3:4 box that fits the screen width and
+// the vertical space left below the header after reserving `bottomReserve` for
+// the caption and any controls, centered horizontally. On phones this resolves
+// to the full-width frame (sized by width); on tall/large screens like iPad it
+// shrinks to fit so the caption and controls stay on screen instead of being
+// pushed off the bottom.
+export function frameLayout(
+  screenW: number,
+  screenH: number,
+  insetTop: number,
+  insetBottom: number,
+  bottomReserve: number
+): FrameLayout {
+  const top = frameTop(insetTop);
+  const maxWidth = frameWidth(screenW);
+  const available = Math.max(0, screenH - top - insetBottom - bottomReserve);
+  const height = Math.min(maxWidth / PhotoRatio, available);
+  const width = height * PhotoRatio;
+  const left = (screenW - width) / 2;
+  return { top, left, width, height };
+}
+
 export function PhotoFrame({
   screenW,
   top,
+  width,
+  height,
+  left,
   children,
 }: {
-  screenW: number;
+  screenW?: number;
   top: number;
+  // Overrides for callers that size the frame explicitly (e.g. the adaptive
+  // feed/viewer layouts via frameLayout). Fall back to the full-width
+  // screenW-derived box when omitted.
+  width?: number;
+  height?: number;
+  left?: number;
   children?: ReactNode;
 }) {
   return (
     <View
       style={[
         styles.frame,
-        { top, left: FrameMargin, width: frameWidth(screenW), height: frameHeight(screenW) },
+        {
+          top,
+          left: left ?? FrameMargin,
+          width: width ?? frameWidth(screenW ?? 0),
+          height: height ?? frameHeight(screenW ?? 0),
+        },
       ]}>
       {children}
     </View>

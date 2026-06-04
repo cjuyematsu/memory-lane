@@ -26,7 +26,7 @@ import { Asset } from 'expo-media-library';
 import ShuffleIcon from '@/assets/icons/shuffle.svg';
 import { FeedCard } from '@/components/feed/feed-card';
 import { FeedCardEventsContext, type FeedCardEvents } from '@/components/feed/feed-context';
-import { PhotoFrame, frameHeight, frameTop } from '@/components/feed/photo-frame';
+import { PhotoFrame, frameLayout, type FrameLayout } from '@/components/feed/photo-frame';
 import { DisplayFont, Ink, Paper } from '@/constants/theme';
 import { useAssetFeed } from '@/hooks/use-asset-feed';
 import {
@@ -42,6 +42,11 @@ const SHUFFLE_PREFETCH_TIMEOUT_MS = 600;
 const CROSSFADE_DURATION_MS = 280;
 const CARD_READY_TIMEOUT_MS = 1500;
 const OVERLAY_READY_TIMEOUT_MS = 600;
+// Vertical space below the frame for the caption + shuffle button (+ safe-area
+// inset, added separately). The frame is sized to leave this much room, so on
+// phones it stays the full-width box and on iPad it shrinks to keep the caption
+// and shuffle on screen.
+const FEED_BOTTOM_RESERVE = 130;
 
 function warmAsset(asset: Asset) {
   Image.prefetch(asset.id).catch(() => {});
@@ -54,22 +59,20 @@ function warmAsset(asset: Asset) {
 
 // The framed photo used by the splash (memory-feed entry) and the shuffle
 // crossfade. Tracks its own landscape flag so it letterboxes the same way the
-// live card does; positioned at the shared frameTop so nothing shifts on
+// live card does; shares the live card's frame geometry so nothing shifts on
 // handoff.
 function OverlayFramedPhoto({
   uri,
-  screenW,
-  top,
+  frame,
   onReady,
 }: {
   uri: string;
-  screenW: number;
-  top: number;
+  frame: FrameLayout;
   onReady?: () => void;
 }) {
   const [isLandscape, setIsLandscape] = useState(false);
   return (
-    <PhotoFrame screenW={screenW} top={top}>
+    <PhotoFrame top={frame.top} left={frame.left} width={frame.width} height={frame.height}>
       <Image
         source={{ uri }}
         style={StyleSheet.absoluteFill}
@@ -151,6 +154,14 @@ export function Feed({
     setOutgoingAssetId(null);
     setOverlayPainted(false);
   }, []);
+
+  // Shared frame geometry for the live card, the crossfade/splash overlays, and
+  // the shuffle button, so all three line up and scale together on any screen.
+  const frame = useMemo(
+    () =>
+      frameLayout(layout.width, layout.height, insets.top, insets.bottom, FEED_BOTTOM_RESERVE),
+    [layout.width, layout.height, insets.top, insets.bottom]
+  );
 
   const assets = state.status === 'ready' ? state.assets : [];
 
@@ -416,11 +427,7 @@ export function Feed({
       }}>
       {splash && splashLatched && (isLoading || isReady) ? (
         <View style={StyleSheet.absoluteFill} pointerEvents="none">
-          <OverlayFramedPhoto
-            uri={splash.uri}
-            screenW={layout.width}
-            top={frameTop(insets.top)}
-          />
+          <OverlayFramedPhoto uri={splash.uri} frame={frame} />
         </View>
       ) : null}
 
@@ -458,6 +465,7 @@ export function Feed({
                 isActive={isActive}
                 width={layout.width}
                 height={layout.height}
+                frame={frame}
               />
             )}
             pagingEnabled
@@ -483,8 +491,7 @@ export function Feed({
         <Animated.View style={[styles.crossfadeOverlay, overlayStyle]} pointerEvents="none">
           <OverlayFramedPhoto
             uri={outgoingAssetId}
-            screenW={layout.width}
-            top={frameTop(insets.top)}
+            frame={frame}
             onReady={() => setOverlayPainted(true)}
           />
         </Animated.View>
@@ -496,7 +503,7 @@ export function Feed({
             styles.shuffleWrapper,
             // Centered in the empty band between the caption and the screen
             // bottom (frame bottom + the ~caption block height).
-            { top: frameTop(insets.top) + frameHeight(layout.width) + 80 },
+            { top: frame.top + frame.height + 80 },
           ]}
           pointerEvents="box-none">
           <Pressable style={styles.shuffle} onPress={shuffle} hitSlop={12}>

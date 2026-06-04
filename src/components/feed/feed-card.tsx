@@ -1,6 +1,5 @@
 import { memo, useContext, useEffect, useState } from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
@@ -11,7 +10,7 @@ import { Asset, MediaType } from 'expo-media-library';
 import { VideoView, useVideoPlayer } from 'expo-video';
 
 import { FeedCardEventsContext } from '@/components/feed/feed-context';
-import { PhotoFrame, frameHeight, frameTop } from '@/components/feed/photo-frame';
+import { PhotoFrame, type FrameLayout } from '@/components/feed/photo-frame';
 import { DisplayFont, FrameMargin, Ink, Paper } from '@/constants/theme';
 import { useAssetMetadata, usePlaybackUri } from '@/hooks/use-asset-metadata';
 import { useReverseGeocode } from '@/hooks/use-reverse-geocode';
@@ -25,14 +24,15 @@ export const FeedCard = memo(function FeedCard({
   isActive = true,
   width,
   height,
+  frame,
 }: {
   asset: Asset;
   isCurrent: boolean;
   isActive?: boolean;
   width: number;
   height: number;
+  frame: FrameLayout;
 }) {
-  const insets = useSafeAreaInsets();
   const meta = useAssetMetadata(asset);
   const placeName = useReverseGeocode(meta?.location ?? null);
   const isVideo = meta?.mediaType === MediaType.VIDEO;
@@ -68,12 +68,11 @@ export const FeedCard = memo(function FeedCard({
     onCardReady(asset.id);
   }, [cardReady, opacity, onCardReady, asset.id]);
 
-  const top = frameTop(insets.top);
-  const captionTop = top + frameHeight(width) + 24;
+  const captionTop = frame.top + frame.height + 24;
 
   return (
     <Animated.View style={[styles.container, { width, height }, opacityStyle]}>
-      <PhotoFrame screenW={width} top={top}>
+      <PhotoFrame top={frame.top} left={frame.left} width={frame.width} height={frame.height}>
         {thumbnailUri ? (
           <Image
             source={{ uri: thumbnailUri }}
