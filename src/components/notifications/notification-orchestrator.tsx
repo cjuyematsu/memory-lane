@@ -7,12 +7,7 @@ import * as Notifications from 'expo-notifications';
 
 import { useAssetFeed } from '@/hooks/use-asset-feed';
 import { useNotificationSettings } from '@/hooks/use-notification-settings';
-import {
-  ensureClusters,
-  getClusters,
-  invalidateClusters,
-  isClusterNotifiable,
-} from '@/hooks/use-photo-clusters';
+import { invalidateClusters } from '@/hooks/use-photo-clusters';
 import {
   shouldRotateGeofences,
   startOrRefreshGeofences,
@@ -21,14 +16,10 @@ import {
 import { recordEngaged } from '@/lib/notification-engagement';
 import { setPendingCluster } from '@/lib/pending-cluster';
 
-function openCluster(id: string) {
-  recordEngaged(id);
-  setPendingCluster(id);
+function openCluster(clusterId: string) {
+  recordEngaged(clusterId);
+  setPendingCluster(clusterId);
 }
-
-// DEV ONLY: fires once per JS session so the cluster view auto-opens on
-// launch for UI iteration. Remove before shipping.
-let devPreviewShown = false;
 
 function clusterIdFromResponse(
   response: Notifications.NotificationResponse | null
@@ -58,10 +49,14 @@ export function NotificationOrchestrator() {
   // launched by tapping the notification) plus warm taps.
   useEffect(() => {
     let active = true;
+    // Cold start: the app may have been launched by tapping a notification.
+    // Clear it after handling so a normal relaunch doesn't re-open the same
+    // cluster (getLastNotificationResponseAsync otherwise keeps returning it).
     Notifications.getLastNotificationResponseAsync().then((response) => {
       if (!active) return;
       const id = clusterIdFromResponse(response);
       if (id) openCluster(id);
+      Notifications.clearLastNotificationResponseAsync().catch(() => {});
     });
     const sub = Notifications.addNotificationResponseReceivedListener(
       (response) => {
@@ -85,20 +80,6 @@ export function NotificationOrchestrator() {
       invalidateClusters();
     }
     prevAssetsRef.current = feedState.assets;
-  }, [feedState]);
-
-  // DEV ONLY: auto-open a cluster on launch so the cluster-view UI can be
-  // iterated without firing a real geofence. Fires once per JS session.
-  useEffect(() => {
-    if (!__DEV__ || devPreviewShown) return;
-    if (feedState.status !== 'ready' || feedState.assets.length === 0) return;
-    devPreviewShown = true;
-    (async () => {
-      await ensureClusters(feedState.assets);
-      const clusters = getClusters();
-      const target = clusters?.find(isClusterNotifiable) ?? clusters?.[0];
-      if (target) setPendingCluster(target.id);
-    })();
   }, [feedState]);
 
   // Geofence lifecycle. Runs only when enabled AND we have assets — fetches

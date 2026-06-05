@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-import { File, Paths } from 'expo-file-system';
+import { persistedFile, readPersisted } from '@/lib/persisted-file';
 
 const FILE_NAME = 'notification-settings.json';
 
@@ -16,10 +16,6 @@ let cached: NotificationSettings | null = null;
 let inflight: Promise<NotificationSettings> | null = null;
 const subscribers = new Set<(settings: NotificationSettings) => void>();
 
-function getFile() {
-  return new File(Paths.cache, FILE_NAME);
-}
-
 function notify() {
   if (!cached) return;
   for (const cb of subscribers) cb(cached);
@@ -30,12 +26,11 @@ function loadFromDisk(): Promise<NotificationSettings> {
   if (inflight) return inflight;
   inflight = (async () => {
     try {
-      const file = getFile();
-      if (!file.exists) {
+      const text = await readPersisted(FILE_NAME);
+      if (text == null) {
         cached = { ...DEFAULTS };
         return cached;
       }
-      const text = await file.text();
       const parsed = JSON.parse(text) as Partial<NotificationSettings>;
       cached = { ...DEFAULTS, ...parsed };
       return cached;
@@ -51,7 +46,7 @@ function loadFromDisk(): Promise<NotificationSettings> {
 
 function saveToDisk(settings: NotificationSettings): void {
   try {
-    const file = getFile();
+    const file = persistedFile(FILE_NAME);
     if (!file.exists) file.create();
     file.write(JSON.stringify(settings));
   } catch {

@@ -11,7 +11,12 @@ import {
 
 // ~50m grid quantization. 1° latitude ≈ 111km, so 0.0005° ≈ 55m.
 const CELL_SIZE_DEG = 0.0005;
-const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
+// A place is worth resurfacing only if you haven't been there in a while — its
+// most RECENT photo is older than this. That's what actually excludes places
+// you currently frequent (home, work) and anywhere visited lately; the whole
+// point is returning somewhere after a long absence. (A newest photo this old
+// also guarantees the memory itself is old.) Tune here.
+const RECENT_VISIT_MS = 90 * 24 * 60 * 60 * 1000; // ~3 months
 
 export type PhotoCluster = {
   // Stable identifier derived from the grid cell — survives across sessions
@@ -111,10 +116,10 @@ export function isClusterNotifiable(
   cluster: PhotoCluster,
   now: number = Date.now()
 ): boolean {
-  if (cluster.oldestCreationTime == null) return false;
-  // Notifiable only if it contains a photo older than 90 days, suppressing
-  // places where you currently spend time (home, work).
-  return now - cluster.oldestCreationTime > NINETY_DAYS_MS;
+  // Keyed on the NEWEST photo: notify only for places you haven't photographed
+  // in RECENT_VISIT_MS, so somewhere you still frequent (home) never qualifies.
+  if (cluster.newestCreationTime == null) return false;
+  return now - cluster.newestCreationTime > RECENT_VISIT_MS;
 }
 
 export function distanceMeters(

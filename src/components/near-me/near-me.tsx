@@ -61,15 +61,14 @@ export function NearMe({
     onViewerOpenChange?.(viewerIndex !== null);
   }, [viewerIndex, onViewerOpenChange]);
 
-  // Floats at the top-right of the dark grid panel (below the nav so it can't
-  // collide with the NEAR ME label); white on a dark pill so it reads on both
-  // the panel and any photo.
+  // Floats at the lower-right of the grid as a white pill with a dark bell, so
+  // it stays obvious over the photos and matches the gallery theme.
   const notificationsButton = (
     <Pressable
       onPress={() => setSettingsOpen(true)}
-      style={[styles.notificationsBtn, { top: gridPaddingTop + 6, right: FrameMargin + 6 }]}
+      style={[styles.notificationsBtn, { bottom: insets.bottom + 16, right: FrameMargin + 6 }]}
       hitSlop={12}>
-      <BellIcon width={18} height={18} fill={Paper} />
+      <BellIcon width={22} height={22} fill={Ink} />
     </Pressable>
   );
 
@@ -273,11 +272,16 @@ const styles = StyleSheet.create({
   notificationsBtn: {
     position: 'absolute',
     zIndex: 10,
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: Paper,
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 5,
   },
 });

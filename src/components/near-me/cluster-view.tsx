@@ -64,8 +64,9 @@ export function ClusterView({
         creationTime: loc?.creationTime ?? null,
       });
     }
-    // Newest first, so the story opens on the most recent memory here.
-    result.sort((a, b) => (b.creationTime ?? 0) - (a.creationTime ?? 0));
+    // Oldest first, so the story opens on the oldest memory here and tapping /
+    // swiping moves forward in time toward the newest.
+    result.sort((a, b) => (a.creationTime ?? 0) - (b.creationTime ?? 0));
     return result;
   }, [cluster, assets]);
 

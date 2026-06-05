@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-// Holds the cluster id the user tapped a notification for, so the UI can
+// Holds the cluster id the user tapped a notification/banner for, so the UI can
 // switch to Near Me and show that location's photos. Module-level so the
 // notification-response listener (outside React) and components can share it.
 let pendingClusterId: string | null = null;

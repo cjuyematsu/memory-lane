@@ -1,4 +1,4 @@
-import { File, Paths } from 'expo-file-system';
+import { persistedFile, readPersisted } from '@/lib/persisted-file';
 
 const FILE_NAME = 'notification-engagement.json';
 // Surfacing a cluster this many times without the user ever tapping through
@@ -13,15 +13,10 @@ type EngagementEntry = {
 
 type EngagementMap = Record<string, EngagementEntry>;
 
-function getFile() {
-  return new File(Paths.cache, FILE_NAME);
-}
-
 async function load(): Promise<EngagementMap> {
   try {
-    const file = getFile();
-    if (!file.exists) return {};
-    const text = await file.text();
+    const text = await readPersisted(FILE_NAME);
+    if (text == null) return {};
     const parsed = JSON.parse(text);
     return parsed && typeof parsed === 'object' ? (parsed as EngagementMap) : {};
   } catch {
@@ -31,7 +26,7 @@ async function load(): Promise<EngagementMap> {
 
 function save(map: EngagementMap): void {
   try {
-    const file = getFile();
+    const file = persistedFile(FILE_NAME);
     if (!file.exists) file.create();
     file.write(JSON.stringify(map));
   } catch {

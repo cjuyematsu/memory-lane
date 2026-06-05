@@ -1,7 +1,7 @@
-import { File, Paths } from 'expo-file-system';
 import { Asset, MediaType } from 'expo-media-library';
 
 import { loadAssetTimeLocation } from '@/hooks/use-asset-metadata';
+import { persistedFile, readPersisted } from '@/lib/persisted-file';
 
 // Shared, persisted index of every asset's location/time/type. This is the
 // single expensive pass (one native metadata read per asset) that both the
@@ -42,15 +42,10 @@ let cached: AssetIndex | null = null;
 let syncedFor: Asset[] | null = null;
 let inflight: Promise<AssetIndex> | null = null;
 
-function getFile() {
-  return new File(Paths.cache, INDEX_FILE);
-}
-
 async function loadFromDisk(): Promise<AssetIndex | null> {
   try {
-    const file = getFile();
-    if (!file.exists) return null;
-    const text = await file.text();
+    const text = await readPersisted(INDEX_FILE);
+    if (text == null) return null;
     const parsed = JSON.parse(text);
     if (
       parsed &&
@@ -68,7 +63,7 @@ async function loadFromDisk(): Promise<AssetIndex | null> {
 
 function saveToDisk(index: AssetIndex): void {
   try {
-    const file = getFile();
+    const file = persistedFile(INDEX_FILE);
     if (!file.exists) file.create();
     file.write(JSON.stringify(index));
   } catch {
