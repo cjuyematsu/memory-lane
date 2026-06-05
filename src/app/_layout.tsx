@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useFonts } from 'expo-font';
 import { DarkTheme, DefaultTheme, Slot, ThemeProvider } from 'expo-router';
 import { useColorScheme } from 'react-native';
@@ -7,6 +8,7 @@ import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import { MemoryBanner } from '@/components/notifications/memory-banner';
 import { NotificationOrchestrator } from '@/components/notifications/notification-orchestrator';
 import { configureImageCache } from '@/lib/image-cache';
+import { runOnboardingPermissions } from '@/lib/onboarding-permissions';
 
 // Bound the expo-image disk cache once, before any photo renders, so it can't
 // grow without limit as the feed/shuffle decode images across the library.
@@ -20,6 +22,11 @@ export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
     'ArchivoExpanded-Black': require('@/assets/fonts/ArchivoExpanded-Black.ttf'),
   });
+  // Surface the first-run permission prompts in order (photos -> location ->
+  // notifications) once per launch. Idempotent, so re-mounts are harmless.
+  useEffect(() => {
+    runOnboardingPermissions();
+  }, []);
   // Hold the content until the font is ready so the first paint already uses it
   // (otherwise the nav flashes the fallback font until something re-renders).
   // `|| fontError` so a load failure still shows the app (with the fallback).
