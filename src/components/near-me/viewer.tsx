@@ -1,7 +1,6 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import {
   FlatList,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -27,7 +26,7 @@ import { scheduleOnRN } from 'react-native-worklets';
 import FilmIcon from '@/assets/icons/film.svg';
 import { PhotoFrame, frameTop } from '@/components/feed/photo-frame';
 import { DisplayFont, FrameMargin, Ink, Paper, PhotoRatio } from '@/constants/theme';
-import { useAssetMetadata, usePlaybackUri } from '@/hooks/use-asset-metadata';
+import { usePlaybackUri } from '@/hooks/use-asset-metadata';
 import { useReverseGeocode } from '@/hooks/use-reverse-geocode';
 import type { NearbyAsset } from '@/hooks/use-nearby-assets';
 import { formatTimeAgo } from '@/utils/time-ago';
@@ -46,7 +45,7 @@ const STORY_CHROME = 24; // memories mode has no filmstrip, just breathing room
 const CAPTION_RESERVE = 104; // gap + time-ago + place line(s) below the frame
 
 export function Viewer({
-  items,
+  items: itemsProp,
   startIndex,
   isActive = true,
   onClose,
@@ -63,6 +62,12 @@ export function Viewer({
   tapToAdvance?: boolean;
 }) {
   const { width, height } = useWindowDimensions();
+  // Freeze the list for this viewing session. The parent's `items` gets a new
+  // array reference whenever the background nearby-scan or a MediaLibrary
+  // change reloads, and a paging FlatList resets to offset 0 when its `data`
+  // identity changes mid-scroll — which snapped the pager back to the first
+  // photo. Snapshot on open; closing and reopening picks up any new photos.
+  const [items] = useState(() => itemsProp);
   const [index, setIndex] = useState(startIndex);
   const pagerRef = useRef<FlatList<NearbyAsset>>(null);
   const filmRef = useRef<ScrollView>(null);
@@ -281,25 +286,32 @@ const ViewerPage = memo(function ViewerPage({
   const placeName = useReverseGeocode(item.location);
   const isVideo = item.mediaType === MediaType.VIDEO;
   const playbackUri = usePlaybackUri(isVideo && isCurrent ? item.asset : null);
-  const meta = useAssetMetadata(Platform.OS === 'ios' ? null : item.asset);
-  const thumbnailUri = Platform.OS === 'ios' ? item.asset.id : meta?.uri;
+  // content:// (Android) / ph:// (iOS) via asset.id — scoped-storage safe,
+  // unlike the file:// path that rendered blank on Android.
+  const thumbnailUri = item.asset.id;
+  const [ratio, setRatio] = useState<number | null>(null);
 
-  // Same framed look as the Camera Roll feed: the photo sits inside a black
-  // 3:4 frame on the white canvas, contained so the whole image is always
-  // visible (letterboxed by the frame's black fill), with the time-ago/place
-  // caption in Archivo Expanded Black below it. The frame is the largest 3:4
-  // box that fits between the header and the bottom chrome with room for the
-  // caption: on tall phones that's the full-width feed frame, and on short
-  // phones it shrinks and stays centered so nothing overlaps.
-  const top = frameTop(insets.top);
+  // The black frame hugs each photo's own aspect ratio (the largest box of that
+  // shape that fits the available area), instead of forcing a fixed 3:4 box —
+  // so off-ratio photos fill the frame edge-to-edge with no awkward black bars.
+  // Defaults to 3:4 until the image reports its dimensions, then snaps to its
+  // real shape. The frame is centered in the band between the header and the
+  // bottom chrome (which reserves room for the caption).
+  const top0 = frameTop(insets.top);
   const available = Math.max(
     0,
-    height - top - bottomChrome - insets.bottom - CAPTION_RESERVE
+    height - top0 - bottomChrome - insets.bottom - CAPTION_RESERVE
   );
   const maxFrameW = width - 2 * FrameMargin;
-  const frameH = Math.min(maxFrameW / PhotoRatio, available);
-  const frameW = frameH * PhotoRatio;
+  const r = ratio ?? PhotoRatio;
+  let frameW = maxFrameW;
+  let frameH = frameW / r;
+  if (frameH > available) {
+    frameH = available;
+    frameW = frameH * r;
+  }
   const frameLeft = (width - frameW) / 2;
+  const top = top0 + Math.max(0, (available - frameH) / 2);
   const captionTop = top + frameH + 24;
 
   return (
@@ -313,6 +325,10 @@ const ViewerPage = memo(function ViewerPage({
             cachePolicy="memory-disk"
             transition={0}
             recyclingKey={item.asset.id}
+            onLoad={(e) => {
+              const { width: w, height: h } = e.source ?? {};
+              if (w && h) setRatio(w / h);
+            }}
           />
         ) : null}
         {isVideo && isCurrent && isActive && playbackUri ? (
@@ -359,13 +375,10 @@ function ViewerVideo({ uri }: { uri: string }) {
 
 const FilmstripThumb = memo(function FilmstripThumb({ item }: { item: NearbyAsset }) {
   const isVideo = item.mediaType === MediaType.VIDEO;
-  const meta = useAssetMetadata(Platform.OS === 'ios' ? null : item.asset);
-  const thumbnailUri = Platform.OS === 'ios' ? item.asset.id : meta?.uri;
-  if (!thumbnailUri) return <View style={styles.thumb} />;
   return (
     <View style={styles.thumb}>
       <Image
-        source={{ uri: thumbnailUri }}
+        source={{ uri: item.asset.id }}
         style={styles.thumb}
         contentFit="cover"
         cachePolicy="memory-disk"

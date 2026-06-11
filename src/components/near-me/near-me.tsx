@@ -110,7 +110,11 @@ export function NearMe({
           <Text style={styles.body}>
             Location access is needed to surface photos taken near you.
           </Text>
-          <Pressable style={styles.button} onPress={refreshLocation}>
+          <Pressable
+            style={styles.button}
+            onPress={() =>
+              locationState.canAskAgain ? refreshLocation() : Linking.openSettings()
+            }>
             <Text style={styles.buttonLabel}>
               {locationState.canAskAgain ? 'Try again' : 'Open Settings'}
             </Text>
