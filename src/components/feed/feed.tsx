@@ -38,10 +38,18 @@ import { prefetchReverseGeocode } from '@/hooks/use-reverse-geocode';
 
 let rememberedAssetId: string | null = null;
 const SHUFFLE_QUEUE_SIZE = 4;
-const SHUFFLE_PREFETCH_TIMEOUT_MS = 600;
-const CROSSFADE_DURATION_MS = 280;
+// Queue hits are pre-warmed, so these only cap the cold/failure paths; kept
+// short so a shuffle never feels stalled. The fade is brisk on purpose —
+// the overlay's paint gating already guarantees there's nothing to hide.
+const SHUFFLE_PREFETCH_TIMEOUT_MS = 350;
+const CROSSFADE_DURATION_MS = 180;
 const CARD_READY_TIMEOUT_MS = 1500;
-const OVERLAY_READY_TIMEOUT_MS = 600;
+const OVERLAY_READY_TIMEOUT_MS = 350;
+// Stable empty list so a not-ready feed doesn't change `assets` identity
+// every render (which would churn every assets-dependent hook below).
+const NO_ASSETS: Asset[] = [];
+// Module-level so FlatList sees a stable viewabilityConfig identity.
+const VIEWABILITY_CONFIG = { itemVisiblePercentThreshold: 60 };
 // Vertical space below the frame for the caption + shuffle button (+ safe-area
 // inset, added separately). The frame is sized to leave this much room, so on
 // phones it stays the full-width box and on iPad it shrinks to keep the caption
@@ -111,7 +119,6 @@ export function Feed({
   const [layoutMeasured, setLayoutMeasured] = useState(false);
   const [entryIndex, setEntryIndex] = useState<number | null>(null);
   const [currentId, setCurrentId] = useState<string | null>(null);
-  const [shuffleQueue, setShuffleQueue] = useState<string[]>([]);
   const [outgoingAssetId, setOutgoingAssetId] = useState<string | null>(null);
   const [overlayPainted, setOverlayPainted] = useState(false);
   const [splashLatched, setSplashLatched] = useState(true);
@@ -121,6 +128,10 @@ export function Feed({
   const pendingShuffleRef = useRef<{ pickedId: string; newIdx: number } | null>(
     null
   );
+  // Pre-picked, pre-warmed shuffle destinations. Never rendered, so a ref —
+  // refills happen inside the entry commit and the shuffle handler instead of
+  // a setState-in-effect cascade.
+  const shuffleQueueRef = useRef<string[]>([]);
 
   // The splash backdrop is only used for the memory-feed flow, where the
   // incoming startAssetId is guaranteed to be the destination photo. The
@@ -163,7 +174,35 @@ export function Feed({
     [layout.width, layout.height, insets.top, insets.bottom]
   );
 
-  const assets = state.status === 'ready' ? state.assets : [];
+  const assets = useMemo(
+    () => (state.status === 'ready' ? state.assets : NO_ASSETS),
+    [state]
+  );
+
+  const refillShuffleQueue = useCallback(
+    (alsoExclude?: string | null) => {
+      if (!isActive || assets.length === 0) return;
+      const queue = shuffleQueueRef.current;
+      if (queue.length >= SHUFFLE_QUEUE_SIZE) return;
+      const exclude = new Set<string>(queue);
+      if (currentId) exclude.add(currentId);
+      if (alsoExclude) exclude.add(alsoExclude);
+      const need = SHUFFLE_QUEUE_SIZE - queue.length;
+      const additions: Asset[] = [];
+      for (let i = 0; i < 50 && additions.length < need; i++) {
+        const candidate = assets[Math.floor(Math.random() * assets.length)];
+        if (!exclude.has(candidate.id)) {
+          additions.push(candidate);
+          exclude.add(candidate.id);
+        }
+      }
+      for (const a of additions) {
+        warmAsset(a);
+        queue.push(a.id);
+      }
+    },
+    [assets, currentId, isActive]
+  );
 
   const prefetchAround = useCallback(
     (idx: number) => {
@@ -187,6 +226,7 @@ export function Feed({
         if (rememberLastPosition) rememberedAssetId = chosen.id;
         warmAsset(chosen);
         prefetchAround(idx);
+        refillShuffleQueue(chosen.id);
       };
       if (startAssetId) {
         const idx = assets.findIndex((a) => a.id === startAssetId);
@@ -204,7 +244,15 @@ export function Feed({
       }
       commit(Math.floor(Math.random() * assets.length));
     }
-  }, [state, entryIndex, assets, prefetchAround, startAssetId, rememberLastPosition]);
+  }, [
+    state,
+    entryIndex,
+    assets,
+    prefetchAround,
+    refillShuffleQueue,
+    startAssetId,
+    rememberLastPosition,
+  ]);
 
   useEffect(() => {
     if (currentId && rememberLastPosition) rememberedAssetId = currentId;
@@ -219,50 +267,36 @@ export function Feed({
     return () => clearTimeout(t);
   }, [state.status, entryIndex]);
 
+  // Top the queue back up whenever the feed becomes active or the library
+  // changes (refill is ref+prefetch only — no renders), so the first shuffle
+  // after switching back to this tab still hits a warm target.
   useEffect(() => {
-    if (!isActive) return;
-    if (assets.length === 0) return;
-    if (shuffleQueue.length >= SHUFFLE_QUEUE_SIZE) return;
-
-    const exclude = new Set<string>(shuffleQueue);
-    if (currentId) exclude.add(currentId);
-
-    const need = SHUFFLE_QUEUE_SIZE - shuffleQueue.length;
-    const additions: string[] = [];
-    for (let i = 0; i < 50 && additions.length < need; i++) {
-      const candidate = assets[Math.floor(Math.random() * assets.length)].id;
-      if (!exclude.has(candidate)) {
-        additions.push(candidate);
-        exclude.add(candidate);
-      }
-    }
-    if (additions.length > 0) {
-      for (const id of additions) {
-        const a = assets.find((x) => x.id === id);
-        if (a) warmAsset(a);
-      }
-      setShuffleQueue((prev) => [...prev, ...additions]);
-    }
-  }, [shuffleQueue, currentId, assets, isActive]);
+    if (isActive) refillShuffleQueue();
+  }, [isActive, refillShuffleQueue]);
 
   const shuffle = useCallback(async () => {
     if (assets.length === 0) return;
 
+    const queue = shuffleQueueRef.current;
     let pickedId: string | undefined;
     let queueDrop = 0;
-    for (const candidate of shuffleQueue) {
+    for (const candidate of queue) {
       queueDrop++;
       if (candidate !== currentId && assets.some((a) => a.id === candidate)) {
         pickedId = candidate;
         break;
       }
     }
-    if (queueDrop > 0) {
-      setShuffleQueue((prev) => prev.slice(queueDrop));
-    }
+    if (queueDrop > 0) queue.splice(0, queueDrop);
+
     const pickedAsset = pickedId ? assets.find((a) => a.id === pickedId) : undefined;
     if (!pickedId || !pickedAsset) {
-      const idx = Math.floor(Math.random() * assets.length);
+      // Cold path (empty/stale queue): pick fresh, skipping the current photo
+      // so a shuffle always visibly changes something.
+      let idx = Math.floor(Math.random() * assets.length);
+      if (assets.length > 1 && assets[idx].id === currentId) {
+        idx = (idx + 1) % assets.length;
+      }
       pickedId = assets[idx].id;
       await Promise.race([
         Image.prefetch(pickedId).catch(() => {}),
@@ -271,6 +305,7 @@ export function Feed({
     } else {
       warmAsset(pickedAsset);
     }
+    refillShuffleQueue(pickedId);
 
     const newIdx = assets.findIndex((a) => a.id === pickedId);
     if (newIdx < 0) return;
@@ -297,7 +332,7 @@ export function Feed({
     setCurrentId(pickedId);
     if (rememberLastPosition) rememberedAssetId = pickedId;
     listRef.current?.scrollToIndex({ index: newIdx, animated: false });
-  }, [assets, currentId, fadeOpacity, rememberLastPosition, shuffleQueue]);
+  }, [assets, currentId, fadeOpacity, refillShuffleQueue, rememberLastPosition]);
 
   // Drive the crossfade only once the overlay's image has actually painted
   // (overlayPainted, set from the overlay Image's onLoad/onError or the
@@ -376,16 +411,18 @@ export function Feed({
     [layout.height]
   );
 
-  const onViewableItemsChanged = useRef(
+  // FlatList requires both of these to keep a stable identity across renders;
+  // an empty-deps useCallback and a module-style constant satisfy that without
+  // reading refs during render.
+  const onViewableItemsChanged = useCallback(
     ({ viewableItems }: { viewableItems: ViewToken<Asset>[] }) => {
       const first = viewableItems[0];
       if (first?.item) {
         setCurrentId(first.item.id);
       }
-    }
-  ).current;
-
-  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 60 }).current;
+    },
+    []
+  );
 
   if (!permission) {
     return (
@@ -483,7 +520,7 @@ export function Feed({
             maxToRenderPerBatch={3}
             removeClippedSubviews
             onViewableItemsChanged={onViewableItemsChanged}
-            viewabilityConfig={viewabilityConfig}
+            viewabilityConfig={VIEWABILITY_CONFIG}
             extraData={`${currentId}|${isActive}`}
           />
         </FeedCardEventsContext.Provider>
