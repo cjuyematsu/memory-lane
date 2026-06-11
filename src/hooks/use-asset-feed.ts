@@ -156,11 +156,23 @@ export function useAssetFeed(enabled: boolean) {
     };
   }, []);
 
+  // Initial kickoff goes straight to the module loader: the 'idle' status
+  // already renders as a spinner everywhere, so no synchronous 'loading'
+  // transition is needed (results/errors land via async callbacks).
   useEffect(() => {
-    if (enabled && state.status === 'idle') {
-      reload(false);
-    }
-  }, [enabled, state.status, reload]);
+    if (!enabled || state.status !== 'idle') return;
+    let stale = false;
+    runReload().catch((e) => {
+      if (stale) return;
+      setState({
+        status: 'error',
+        message: e instanceof Error ? e.message : String(e),
+      });
+    });
+    return () => {
+      stale = true;
+    };
+  }, [enabled, state.status]);
 
   useEffect(() => {
     if (!enabled) return;

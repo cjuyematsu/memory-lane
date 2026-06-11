@@ -19,7 +19,11 @@ import { scheduleOnRN } from 'react-native-worklets';
 import { Feed } from '@/components/feed/feed';
 import { NearMe } from '@/components/near-me/near-me';
 import { DisplayFont, Ink, Paper } from '@/constants/theme';
-import { usePendingCluster } from '@/lib/pending-cluster';
+import {
+  getPendingCluster,
+  subscribePendingCluster,
+  usePendingCluster,
+} from '@/lib/pending-cluster';
 
 type Tab = 'cameraRoll' | 'nearMe';
 
@@ -35,7 +39,12 @@ const OVERLAY_TIMING = { duration: 220, easing: TAB_EASING };
 
 export function TopTabs() {
   const { width } = useWindowDimensions();
-  const [tab, setTab] = useState<Tab>('cameraRoll');
+  // A tapped notification routes to the Near Me tab to show that location:
+  // start there if a cluster is already pending (cold-start tap), and follow
+  // later taps via the store subscription (not an effect-watched value).
+  const [tab, setTab] = useState<Tab>(() =>
+    getPendingCluster() ? 'nearMe' : 'cameraRoll'
+  );
   const [memoryEntry, setMemoryEntry] = useState<string | null>(null);
   const [nearMeViewerOpen, setNearMeViewerOpen] = useState(false);
 
@@ -43,10 +52,13 @@ export function TopTabs() {
   const overlayX = useSharedValue(width);
   const pendingCluster = usePendingCluster();
 
-  // A tapped notification routes to the Near Me tab to show that location.
-  useEffect(() => {
-    if (pendingCluster) setTab('nearMe');
-  }, [pendingCluster]);
+  useEffect(
+    () =>
+      subscribePendingCluster((id) => {
+        if (id) setTab('nearMe');
+      }),
+    []
+  );
 
   // Animate the pager when `tab` changes (whether by gesture or tap).
   useEffect(() => {

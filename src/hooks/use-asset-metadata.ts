@@ -164,20 +164,15 @@ export function usePlaybackUri(asset: Asset | null): string | null {
 }
 
 export function useAssetMetadata(asset: Asset | null): AssetMetadata | null {
-  const [meta, setMeta] = useState<AssetMetadata | null>(() =>
-    asset ? fullCache.get(asset.id) ?? null : null
+  // Derived rather than synced: the cache is the source of truth, and the
+  // keyed `fetched` record only fills the gap until hydrateAsset populates it.
+  // A changed/null asset simply stops matching — no setState-in-effect resets.
+  const [fetched, setFetched] = useState<{ id: string; meta: AssetMetadata } | null>(
+    null
   );
 
   useEffect(() => {
-    if (!asset) {
-      setMeta(null);
-      return;
-    }
-    const cached = fullCache.get(asset.id);
-    if (cached) {
-      setMeta(cached);
-      return;
-    }
+    if (!asset || fullCache.has(asset.id)) return;
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let attempt = 0;
@@ -186,7 +181,7 @@ export function useAssetMetadata(asset: Asset | null): AssetMetadata | null {
     const tryHydrate = () => {
       hydrateAsset(asset)
         .then((m) => {
-          if (!cancelled) setMeta(m);
+          if (!cancelled) setFetched({ id: asset.id, meta: m });
         })
         .catch(() => {
           if (cancelled) return;
@@ -204,5 +199,8 @@ export function useAssetMetadata(asset: Asset | null): AssetMetadata | null {
     };
   }, [asset]);
 
-  return meta;
+  if (!asset) return null;
+  return (
+    fullCache.get(asset.id) ?? (fetched?.id === asset.id ? fetched.meta : null)
+  );
 }

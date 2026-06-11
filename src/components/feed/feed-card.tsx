@@ -46,7 +46,10 @@ export const FeedCard = memo(function FeedCard({
   const thumbnailUri = asset.id;
   const { onCardReady } = useContext(FeedCardEventsContext);
 
-  const [placeTimedOut, setPlaceTimedOut] = useState(false);
+  // Keyed by asset id so a recycled/changed card derives a fresh "not timed
+  // out" without a state reset in the effect body.
+  const [timedOutId, setTimedOutId] = useState<string | null>(null);
+  const placeTimedOut = timedOutId === asset.id;
   const [imageReady, setImageReady] = useState(false);
   const [safetyVisible, setSafetyVisible] = useState(false);
   // Landscape photos are letterboxed (contain) on #000; everything else fills
@@ -54,11 +57,10 @@ export const FeedCard = memo(function FeedCard({
   const [isLandscape, setIsLandscape] = useState(false);
 
   useEffect(() => {
-    setPlaceTimedOut(false);
     if (!meta?.location || placeName) return;
-    const t = setTimeout(() => setPlaceTimedOut(true), PLACE_TIMEOUT_MS);
+    const t = setTimeout(() => setTimedOutId(asset.id), PLACE_TIMEOUT_MS);
     return () => clearTimeout(t);
-  }, [meta?.location, placeName]);
+  }, [meta?.location, placeName, asset.id]);
 
   const overlayReady =
     meta != null && (meta.location == null || placeName != null || placeTimedOut);

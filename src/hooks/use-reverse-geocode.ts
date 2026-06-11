@@ -49,23 +49,31 @@ export function prefetchReverseGeocode(coords: Coords | null): void {
 }
 
 export function useReverseGeocode(coords: Coords | null): string | null {
-  const [name, setName] = useState<string | null>(() =>
-    coords ? cache.get(keyFor(coords)) ?? null : null
+  // The name is derived: straight from the cache when present, else from the
+  // last completed lookup if it matches the current key. No state resets in
+  // the effect body — switching coords just stops matching the stale result.
+  const [looked, setLooked] = useState<{ key: string; name: string | null } | null>(
+    null
   );
+  const lat = coords?.latitude;
+  const lng = coords?.longitude;
+  const key = lat != null && lng != null ? keyFor({ latitude: lat, longitude: lng }) : null;
 
   useEffect(() => {
-    if (!coords) {
-      setName(null);
-      return;
-    }
+    if (lat == null || lng == null) return;
+    const target = { latitude: lat, longitude: lng };
+    const k = keyFor(target);
+    if (cache.has(k)) return;
     let cancelled = false;
-    lookup(coords).then((n) => {
-      if (!cancelled) setName(n);
+    lookup(target).then((n) => {
+      if (!cancelled) setLooked({ key: k, name: n });
     });
     return () => {
       cancelled = true;
     };
-  }, [coords?.latitude, coords?.longitude]);
+  }, [lat, lng]);
 
-  return name;
+  if (key == null) return null;
+  if (cache.has(key)) return cache.get(key) ?? null;
+  return looked?.key === key ? looked.name : null;
 }

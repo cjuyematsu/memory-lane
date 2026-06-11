@@ -20,6 +20,19 @@ export function getPendingCluster(): string | null {
   return pendingClusterId;
 }
 
+// Direct store subscription for callers that react to changes with their own
+// state (e.g. TopTabs switching tabs) — setState belongs in the callback, not
+// in an effect watching the hook value. Returns the unsubscribe function.
+export function subscribePendingCluster(
+  cb: (id: string | null) => void
+): () => void {
+  const fn = () => cb(pendingClusterId);
+  subscribers.add(fn);
+  return () => {
+    subscribers.delete(fn);
+  };
+}
+
 export function usePendingCluster(): string | null {
   const [id, setId] = useState<string | null>(pendingClusterId);
   useEffect(() => {

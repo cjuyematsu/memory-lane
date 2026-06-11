@@ -108,6 +108,10 @@ export function useCurrentLocation() {
     const cb = () => load();
     subscribers.add(cb);
     ensureAppStateListener();
+    // False positive: every setState inside load() sits after an await (the
+    // first statement is a permission read), so nothing renders synchronously
+    // from this effect — the rule can't see through the async function.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
     return () => {
       subscribers.delete(cb);

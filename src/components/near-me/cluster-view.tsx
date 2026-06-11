@@ -25,16 +25,23 @@ export function ClusterView({
   isActive: boolean;
   onBack: () => void;
 }) {
-  const [cluster, setCluster] = useState<PhotoCluster | null>(null);
-  const [loaded, setLoaded] = useState(false);
+  // Keyed result: a new clusterId simply stops matching, which is the
+  // "loading" state — no synchronous reset in the effect body.
+  const [result, setResult] = useState<{
+    id: string;
+    cluster: PhotoCluster | null;
+  } | null>(null);
+  const loaded = result?.id === clusterId;
+  const cluster = loaded ? result.cluster : null;
 
   useEffect(() => {
     let active = true;
-    setLoaded(false);
     loadClustersFromDisk().then((clusters) => {
       if (!active) return;
-      setCluster(clusters?.find((c) => c.id === clusterId) ?? null);
-      setLoaded(true);
+      setResult({
+        id: clusterId,
+        cluster: clusters?.find((c) => c.id === clusterId) ?? null,
+      });
     });
     return () => {
       active = false;
