@@ -2,11 +2,19 @@ import { useEffect, useState } from 'react';
 import { AppState } from 'react-native';
 
 import * as MediaLibrary from 'expo-media-library';
+import type { GranularPermission } from 'expo-media-library';
 
 // A single shared photo-permission state across the whole app. expo's
 // `usePermissions` keeps per-hook state, so granting in Camera Roll wouldn't
 // update Near Me (or vice versa). This module holds one cached response and
 // notifies every consumer, so a grant in either tab immediately unlocks both.
+
+// This app needs photos + videos, never audio. Scoping the granular set means
+// `granted` reflects only those — otherwise on Android 13+ the *separate*
+// "Music and audio" permission (READ_MEDIA_AUDIO) staying off keeps `granted`
+// false even after the user allows "Photos and videos" in Settings, leaving
+// the app stuck on the locked screen. (Ignored on iOS.)
+const MEDIA_PERMISSIONS: GranularPermission[] = ['photo', 'video'];
 
 let cached: MediaLibrary.PermissionResponse | null = null;
 let inflight: Promise<MediaLibrary.PermissionResponse> | null = null;
@@ -21,14 +29,14 @@ function notify() {
 // sequencer (see `ensureMediaPermission` / `src/lib/onboarding-permissions.ts`)
 // so the photos dialog can't stack on top of the location one.
 async function refresh(): Promise<MediaLibrary.PermissionResponse> {
-  const res = await MediaLibrary.getPermissionsAsync();
+  const res = await MediaLibrary.getPermissionsAsync(false, MEDIA_PERMISSIONS);
   cached = res;
   notify();
   return res;
 }
 
 async function request(): Promise<MediaLibrary.PermissionResponse> {
-  const res = await MediaLibrary.requestPermissionsAsync();
+  const res = await MediaLibrary.requestPermissionsAsync(false, MEDIA_PERMISSIONS);
   cached = res;
   notify();
   return res;
@@ -39,9 +47,9 @@ async function request(): Promise<MediaLibrary.PermissionResponse> {
 // unlocks the instant access is granted. Awaited by the sequencer so the
 // location prompt never appears until photos has been answered.
 export async function ensureMediaPermission(): Promise<MediaLibrary.PermissionResponse> {
-  let res = await MediaLibrary.getPermissionsAsync();
+  let res = await MediaLibrary.getPermissionsAsync(false, MEDIA_PERMISSIONS);
   if (!res.granted && res.canAskAgain) {
-    res = await MediaLibrary.requestPermissionsAsync();
+    res = await MediaLibrary.requestPermissionsAsync(false, MEDIA_PERMISSIONS);
   }
   cached = res;
   notify();
@@ -55,7 +63,7 @@ export async function ensureMediaPermission(): Promise<MediaLibrary.PermissionRe
 // notifies when the meaningful state actually changed, to avoid re-rendering
 // consumers on every foreground.
 async function recheck(): Promise<void> {
-  const res = await MediaLibrary.getPermissionsAsync();
+  const res = await MediaLibrary.getPermissionsAsync(false, MEDIA_PERMISSIONS);
   if (
     cached &&
     cached.granted === res.granted &&

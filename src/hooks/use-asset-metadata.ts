@@ -26,6 +26,17 @@ export type AssetTimeLocation = {
   location: AssetLocation | null;
 };
 
+// First strictly-positive timestamp. MediaStore reports `0` (epoch) for photos
+// with no DATE_TAKEN (screenshots, downloads, saved images), and `0 ?? next`
+// would keep the 0 — so we can't use `??`. This is why dates sometimes went
+// blank on Android.
+function firstValidTime(...candidates: (number | null | undefined)[]): number | null {
+  for (const c of candidates) {
+    if (c != null && c > 0) return c;
+  }
+  return null;
+}
+
 export function getCachedMetadata(assetId: string): AssetMetadata | undefined {
   return fullCache.get(assetId);
 }
@@ -93,13 +104,17 @@ export async function hydrateAsset(asset: Asset): Promise<AssetMetadata> {
   const p = (async () => {
     try {
       if (Platform.OS === 'ios') {
-        const [mediaType, creationTime, location] = await Promise.all([
+        const [mediaType, ct, location] = await Promise.all([
           asset.getMediaType(),
           loadAssetCreationTime(asset),
           locationCache.has(asset.id)
             ? Promise.resolve(locationCache.get(asset.id) ?? null)
             : loadAssetLocation(asset),
         ]);
+        // Fall back to modification time if the asset has no (valid) creation
+        // time, so the date is always present.
+        const creationTime =
+          firstValidTime(ct) ?? (await asset.getModificationTime().catch(() => null));
         const meta: AssetMetadata = {
           uri: asset.id,
           creationTime,
@@ -111,15 +126,22 @@ export async function hydrateAsset(asset: Asset): Promise<AssetMetadata> {
       }
 
       const [info, mediaType, locationFromCache] = await Promise.all([
-        asset.getInfo(),
-        asset.getMediaType(),
+        asset.getInfo().catch(() => null),
+        asset.getMediaType().catch(() => MediaType.UNKNOWN),
         locationCache.has(asset.id)
           ? Promise.resolve(locationCache.get(asset.id) ?? null)
           : asset.getLocation().catch(() => null),
       ]);
+      // Resolve with whatever we got rather than rejecting: a thrown getInfo()
+      // used to leave meta null forever (retries exhausted), which kept the
+      // card invisible. Many Android assets also report creationTime 0 (or
+      // null); fall back to modificationTime so the date isn't blank.
+      const creationTime = info
+        ? firstValidTime(info.creationTime, info.modificationTime)
+        : null;
       const meta: AssetMetadata = {
-        uri: info.uri,
-        creationTime: info.creationTime ?? null,
+        uri: info?.uri ?? asset.id,
+        creationTime,
         location: locationFromCache,
         mediaType,
       };

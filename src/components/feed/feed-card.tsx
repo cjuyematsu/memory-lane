@@ -1,5 +1,5 @@
 import { memo, useContext, useEffect, useState } from 'react';
-import { Platform, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
@@ -17,6 +17,9 @@ import { useReverseGeocode } from '@/hooks/use-reverse-geocode';
 import { formatTimeAgo } from '@/utils/time-ago';
 
 const PLACE_TIMEOUT_MS = 1500;
+// Hard cap so a card can never stay invisible (= a white screen) if its image
+// somehow reports neither load nor error.
+const CARD_VISIBLE_TIMEOUT_MS = 1500;
 
 export const FeedCard = memo(function FeedCard({
   asset,
@@ -37,11 +40,15 @@ export const FeedCard = memo(function FeedCard({
   const placeName = useReverseGeocode(meta?.location ?? null);
   const isVideo = meta?.mediaType === MediaType.VIDEO;
   const playbackUri = usePlaybackUri(isVideo && isCurrent && isActive ? asset : null);
-  const thumbnailUri = Platform.OS === 'ios' ? asset.id : meta?.uri;
+  // `asset.id` is a loadable URI on both platforms (ph:// on iOS, content:// on
+  // Android). The Android file:// path from getInfo() often isn't readable
+  // under scoped storage and rendered blank, so don't gate the image on it.
+  const thumbnailUri = asset.id;
   const { onCardReady } = useContext(FeedCardEventsContext);
 
   const [placeTimedOut, setPlaceTimedOut] = useState(false);
   const [imageReady, setImageReady] = useState(false);
+  const [safetyVisible, setSafetyVisible] = useState(false);
   // Landscape photos are letterboxed (contain) on #000; everything else fills
   // the 3:4 frame (cover). Determined from the decode since Asset has no dims.
   const [isLandscape, setIsLandscape] = useState(false);
@@ -55,18 +62,29 @@ export const FeedCard = memo(function FeedCard({
 
   const overlayReady =
     meta != null && (meta.location == null || placeName != null || placeTimedOut);
-  const cardReady = imageReady && overlayReady;
 
-  // Stay invisible until image + caption are both ready, then snap to full
-  // opacity (the shuffle/wrap crossfade covers the loading window).
+  // Show the photo as soon as its image is ready — never block visibility on
+  // caption metadata. getInfo()/getMediaType() can throw or hang on Android,
+  // and gating the whole card on that left it stuck at opacity 0 = a fully
+  // white screen. The caption below fades in independently via overlayReady.
+  const visible = imageReady || safetyVisible;
+
+  // Safety net: if the image reports neither load nor error, reveal the card
+  // anyway so it can't hang white.
+  useEffect(() => {
+    if (imageReady) return;
+    const t = setTimeout(() => setSafetyVisible(true), CARD_VISIBLE_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [imageReady]);
+
   const opacity = useSharedValue(0);
   const opacityStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
 
   useEffect(() => {
-    if (!cardReady) return;
+    if (!visible) return;
     opacity.value = 1;
     onCardReady(asset.id);
-  }, [cardReady, opacity, onCardReady, asset.id]);
+  }, [visible, opacity, onCardReady, asset.id]);
 
   const captionTop = frame.top + frame.height + 24;
 

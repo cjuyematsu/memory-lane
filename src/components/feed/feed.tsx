@@ -168,7 +168,9 @@ export function Feed({
   const prefetchAround = useCallback(
     (idx: number) => {
       if (!isActive) return;
-      for (const d of [-1, 1]) {
+      // Warm a couple cards in each direction so a quick flick doesn't outrun
+      // the decode and land on an unrendered (white) card.
+      for (const d of [-2, -1, 1, 2]) {
         const a = assets[idx + d];
         if (a) warmAsset(a);
       }
@@ -476,9 +478,9 @@ export function Feed({
             initialScrollIndex={entryIndex}
             getItemLayout={getItemLayout}
             decelerationRate="fast"
-            windowSize={2}
+            windowSize={5}
             initialNumToRender={1}
-            maxToRenderPerBatch={2}
+            maxToRenderPerBatch={3}
             removeClippedSubviews
             onViewableItemsChanged={onViewableItemsChanged}
             viewabilityConfig={viewabilityConfig}
