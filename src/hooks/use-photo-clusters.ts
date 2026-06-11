@@ -17,6 +17,11 @@ const CELL_SIZE_DEG = 0.0005;
 // point is returning somewhere after a long absence. (A newest photo this old
 // also guarantees the memory itself is old.) Tune here.
 const RECENT_VISIT_MS = 90 * 24 * 60 * 60 * 1000; // ~3 months
+// Home/work spread across several ~50m grid cells, so we treat a spot as
+// "recently visited" if ANY recent photo/video sits within this radius — not
+// just inside the one cell that fired. This is what actually excludes home
+// when your recent photos there landed in an adjacent cell.
+const RECENT_AREA_RADIUS_M = 150;
 
 export type PhotoCluster = {
   // Stable identifier derived from the grid cell — survives across sessions
@@ -138,15 +143,45 @@ export function distanceMeters(
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
+// True if any cluster within RECENT_AREA_RADIUS_M of this point holds a
+// photo/video from inside the recency window — i.e. you've been here lately.
+function hasRecentMediaNearby(
+  clusters: PhotoCluster[],
+  lat: number,
+  lng: number,
+  now: number
+): boolean {
+  return clusters.some(
+    (c) =>
+      c.newestCreationTime != null &&
+      now - c.newestCreationTime <= RECENT_VISIT_MS &&
+      distanceMeters(lat, lng, c.centerLat, c.centerLng) <= RECENT_AREA_RADIUS_M
+  );
+}
+
+// Area-aware notifiability: the cluster's own newest media must be old AND you
+// must not have shot anything recently anywhere nearby. The neighborhood check
+// is what keeps home from notifying when its recent photos sit in an adjacent
+// grid cell. Pass the full cluster list so the radius scan can see neighbors.
+export function isAreaNotifiable(
+  cluster: PhotoCluster,
+  clusters: PhotoCluster[],
+  now: number = Date.now()
+): boolean {
+  if (!isClusterNotifiable(cluster, now)) return false;
+  return !hasRecentMediaNearby(clusters, cluster.centerLat, cluster.centerLng, now);
+}
+
+// Takes the cluster list explicitly (rather than reading the in-memory index)
+// so the headless geofence re-anchor can pass clusters loaded from disk.
 export function nearestNotifiableClusters(
+  clusters: PhotoCluster[],
   lat: number,
   lng: number,
   n: number,
   now: number = Date.now()
 ): PhotoCluster[] {
-  const clusters = getClusters();
-  if (!clusters) return [];
-  const eligible = clusters.filter((c) => isClusterNotifiable(c, now));
+  const eligible = clusters.filter((c) => isAreaNotifiable(c, clusters, now));
   eligible.sort(
     (a, b) =>
       distanceMeters(lat, lng, a.centerLat, a.centerLng) -
@@ -166,7 +201,7 @@ export function findClusterWithinRadius(
   let best: PhotoCluster | null = null;
   let bestDist = radiusMeters;
   for (const c of clusters) {
-    if (!isClusterNotifiable(c, now)) continue;
+    if (!isAreaNotifiable(c, clusters, now)) continue;
     const d = distanceMeters(lat, lng, c.centerLat, c.centerLng);
     if (d <= bestDist) {
       best = c;

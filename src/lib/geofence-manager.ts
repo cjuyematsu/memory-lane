@@ -9,10 +9,13 @@ import { loadSettingsFromDisk } from '@/hooks/use-notification-settings';
 import {
   distanceMeters,
   ensureClusters,
+  findClusterWithinRadius,
   getClusters,
+  isAreaNotifiable,
   isClusterNotifiable,
   loadClustersFromDisk,
   nearestNotifiableClusters,
+  type PhotoCluster,
 } from '@/hooks/use-photo-clusters';
 import { showBanner } from '@/lib/foreground-banner';
 import { isInCooldown, markNotified } from '@/lib/notification-cooldown';
@@ -28,6 +31,20 @@ const MAX_REGIONS = 20;
 const PROXIMITY_RADIUS_METERS = 120;
 const ROTATION_DISTANCE_METERS = 500;
 const ROTATION_INTERVAL_MS = 6 * 60 * 60 * 1000;
+// When there are more notifiable clusters than region slots, one slot becomes
+// a "re-anchor boundary": an exit-only region centered on the anchor, sized to
+// reach the nearest cluster we couldn't register. Leaving it wakes the task
+// (even app-killed) and we re-pick regions around wherever the user is now —
+// background rotation without continuous location tracking.
+export const BOUNDARY_REGION_ID = '__memory-feed-reanchor__';
+// Floor: below this the boundary churns on GPS noise / short walks (the
+// clusters it would surface are mostly covered by the registered 19 anyway).
+// Ceiling: keeps the radius well inside platform region-size limits; a smaller
+// boundary only means an occasional extra (cheap) re-evaluation wake.
+const BOUNDARY_MIN_RADIUS_METERS = 500;
+const BOUNDARY_MAX_RADIUS_METERS = 25_000;
+// Foreground-fallback watch: re-check for a memory after this much movement.
+const FALLBACK_DISTANCE_INTERVAL_M = 40;
 // Dev test notifications fire after this delay so there's time to background
 // the app — foreground notifications are intentionally suppressed (see the
 // handler below), so a too-short delay fires while still on screen and shows
@@ -72,7 +89,10 @@ async function handleClusterEnter(clusterId: string): Promise<void> {
 
   const clusters = await loadClustersFromDisk();
   const cluster = clusters?.find((c) => c.id === clusterId);
-  if (!cluster || !isClusterNotifiable(cluster)) return;
+  // Suppress if you've shot anything nearby in the last ~90 days — treats the
+  // surrounding area (home spans several cells) as "recently visited", so home
+  // doesn't fire even when its recent photos sit in an adjacent grid cell.
+  if (!cluster || !clusters || !isAreaNotifiable(cluster, clusters)) return;
 
   if (await isInCooldown(cluster.centerLat, cluster.centerLng)) return;
   // Skip places the user keeps ignoring.
@@ -179,9 +199,41 @@ export async function triggerNearestMemoryHere(): Promise<{
   };
 }
 
+// Adjacent ~50m clusters sit inside each other's 120m regions, so one arrival
+// can deliver several Enter events at once. Chain them so the cooldown written
+// by the first enter is visible to the rest — run concurrently they all read
+// "not in cooldown" and the same place notifies more than once. Re-anchoring
+// runs on the same chain so regions aren't replaced mid-enter.
+let workChain: Promise<void> = Promise.resolve();
+
+async function enqueue(work: () => Promise<void>, label: string): Promise<void> {
+  workChain = workChain.catch(() => {}).then(work);
+  try {
+    await workChain;
+  } catch (e) {
+    console.warn(label, e);
+  }
+}
+
+// Headless path for a boundary exit: the user left the area the registered
+// regions cover, so re-pick the nearest clusters around wherever they are now.
+// Reads everything from disk — the task may run with the app killed.
+async function reanchorFromBackground(): Promise<void> {
+  const settings = await loadSettingsFromDisk();
+  if (!settings.enabled) return;
+  const clusters = await loadClustersFromDisk();
+  if (!clusters || clusters.length === 0) return;
+  // An exit just fired, so the OS has a fresh fix; fall back to requesting one.
+  const pos =
+    (await Location.getLastKnownPositionAsync()) ??
+    (await Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.Balanced,
+    }));
+  await registerGeofencesAt(pos.coords.latitude, pos.coords.longitude, clusters);
+}
+
 TaskManager.defineTask(GEOFENCE_TASK_NAME, async ({ data, error }) => {
   if (error) {
-    // eslint-disable-next-line no-console
     console.warn('Geofence task error', error);
     return;
   }
@@ -189,10 +241,15 @@ TaskManager.defineTask(GEOFENCE_TASK_NAME, async ({ data, error }) => {
     eventType: Location.GeofencingEventType;
     region: Location.LocationRegion;
   };
-  if (event.eventType !== Location.GeofencingEventType.Enter) return;
   const id = event.region?.identifier;
   if (!id) return;
-  await handleClusterEnter(id);
+  if (id === BOUNDARY_REGION_ID) {
+    if (event.eventType !== Location.GeofencingEventType.Exit) return;
+    await enqueue(reanchorFromBackground, 'Geofence re-anchor failed');
+    return;
+  }
+  if (event.eventType !== Location.GeofencingEventType.Enter) return;
+  await enqueue(() => handleClusterEnter(id), 'Geofence enter handling failed');
 });
 
 // Tracks the location/time at which we last picked the active region set, so
@@ -222,13 +279,24 @@ export async function startOrRefreshGeofences(
   lng: number,
   assets: Asset[]
 ): Promise<void> {
-  await ensureClusters(assets);
-  const nearest = nearestNotifiableClusters(lat, lng, MAX_REGIONS);
+  const clusters = await ensureClusters(assets);
+  await registerGeofencesAt(lat, lng, clusters);
+}
+
+async function registerGeofencesAt(
+  lat: number,
+  lng: number,
+  clusters: PhotoCluster[]
+): Promise<void> {
+  // Ask for one more than fits so we know whether any cluster is left out.
+  const nearest = nearestNotifiableClusters(clusters, lat, lng, MAX_REGIONS + 1);
   if (nearest.length === 0) {
     await stopGeofencingIfActive();
     return;
   }
-  const regions: Location.LocationRegion[] = nearest.map((c) => ({
+  const overflow = nearest.length > MAX_REGIONS;
+  const selected = overflow ? nearest.slice(0, MAX_REGIONS - 1) : nearest;
+  const regions: Location.LocationRegion[] = selected.map((c) => ({
     identifier: c.id,
     latitude: c.centerLat,
     longitude: c.centerLng,
@@ -236,13 +304,86 @@ export async function startOrRefreshGeofences(
     notifyOnEnter: true,
     notifyOnExit: false,
   }));
+  if (overflow) {
+    // Spend the last slot on the re-anchor boundary, sized so its exit fires
+    // before the user could reach the nearest cluster we had to leave out.
+    const firstUncovered = nearest[MAX_REGIONS - 1];
+    const radius = Math.min(
+      BOUNDARY_MAX_RADIUS_METERS,
+      Math.max(
+        BOUNDARY_MIN_RADIUS_METERS,
+        distanceMeters(lat, lng, firstUncovered.centerLat, firstUncovered.centerLng) -
+          PROXIMITY_RADIUS_METERS
+      )
+    );
+    regions.push({
+      identifier: BOUNDARY_REGION_ID,
+      latitude: lat,
+      longitude: lng,
+      radius,
+      notifyOnEnter: false,
+      notifyOnExit: true,
+    });
+  }
   await Location.startGeofencingAsync(GEOFENCE_TASK_NAME, regions);
   lastEvaluatedLat = lat;
   lastEvaluatedLng = lng;
   lastEvaluatedAt = Date.now();
 }
 
+// Foreground fallback: with only When-In-Use location, startGeofencingAsync
+// throws on both platforms, so geofencing can't run at all. While the app is
+// open we watch position instead and push any hit through the same enter
+// pipeline (area rules, cooldown, engagement -> in-app banner). The generation
+// counter closes the gap where stop() lands while watchPositionAsync is still
+// resolving.
+let fallbackGen = 0;
+let fallbackSub: Location.LocationSubscription | null = null;
+
+export async function startForegroundFallback(): Promise<void> {
+  if (fallbackSub) return;
+  const gen = ++fallbackGen;
+  const sub = await Location.watchPositionAsync(
+    {
+      accuracy: Location.Accuracy.Balanced,
+      distanceInterval: FALLBACK_DISTANCE_INTERVAL_M,
+    },
+    (pos) => {
+      void checkFallbackPosition(pos.coords.latitude, pos.coords.longitude);
+    }
+  );
+  if (gen !== fallbackGen || fallbackSub) {
+    sub.remove();
+    return;
+  }
+  fallbackSub = sub;
+}
+
+export function stopForegroundFallback(): void {
+  fallbackGen++;
+  fallbackSub?.remove();
+  fallbackSub = null;
+}
+
+async function checkFallbackPosition(lat: number, lng: number): Promise<void> {
+  // findClusterWithinRadius reads the in-memory index; hydrate it first (a
+  // no-op once cached).
+  const clusters = getClusters() ?? (await loadClustersFromDisk());
+  if (!clusters) return;
+  const cluster = findClusterWithinRadius(lat, lng, PROXIMITY_RADIUS_METERS);
+  if (!cluster) return;
+  await enqueue(
+    () => handleClusterEnter(cluster.id),
+    'Foreground memory check failed'
+  );
+}
+
 export async function stopGeofencingIfActive(): Promise<void> {
+  // Forget the rotation anchor: with regions unregistered, "you haven't moved
+  // since the last evaluation" must not skip re-registration — otherwise
+  // toggling the feature off and back on leaves no geofences monitored until
+  // the user moves 500m or 6h pass.
+  resetEvaluation();
   const isRegistered = await TaskManager.isTaskRegisteredAsync(
     GEOFENCE_TASK_NAME
   );

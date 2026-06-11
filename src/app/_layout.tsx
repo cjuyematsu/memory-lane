@@ -1,3 +1,11 @@
+// Evaluate the geofence manager first: it pulls in expo-task-manager (which
+// registers the Android "expo-task-manager" headless task on import) and runs
+// TaskManager.defineTask in global scope. Doing this before anything else means
+// the task is registered before the OS can start a background geofence launch —
+// otherwise RN logs "No task registered for key expo-task-manager" on cold
+// headless starts.
+import '@/lib/geofence-manager';
+
 import { useEffect } from 'react';
 import { useFonts } from 'expo-font';
 import { DarkTheme, DefaultTheme, Slot, ThemeProvider } from 'expo-router';

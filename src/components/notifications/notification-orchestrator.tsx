@@ -7,10 +7,12 @@ import * as Notifications from 'expo-notifications';
 
 import { useAssetFeed } from '@/hooks/use-asset-feed';
 import { useNotificationSettings } from '@/hooks/use-notification-settings';
-import { invalidateClusters } from '@/hooks/use-photo-clusters';
+import { ensureClusters, invalidateClusters } from '@/hooks/use-photo-clusters';
 import {
   shouldRotateGeofences,
+  startForegroundFallback,
   startOrRefreshGeofences,
+  stopForegroundFallback,
   stopGeofencingIfActive,
 } from '@/lib/geofence-manager';
 import { recordEngaged } from '@/lib/notification-engagement';
@@ -89,6 +91,7 @@ export function NotificationOrchestrator() {
   useEffect(() => {
     if (!enabled) {
       stopGeofencingIfActive().catch(() => {});
+      stopForegroundFallback();
       return;
     }
     if (!hasAssets) return;
@@ -99,6 +102,18 @@ export function NotificationOrchestrator() {
       try {
         const perm = await Location.getForegroundPermissionsAsync();
         if (perm.status !== 'granted' || cancelled) return;
+        const bg = await Location.getBackgroundPermissionsAsync();
+        if (cancelled) return;
+        if (bg.status !== 'granted') {
+          // Without "Always", startGeofencingAsync throws on both platforms —
+          // fall back to a foreground-only position watch that surfaces the
+          // in-app banner through the same enter pipeline. Build the cluster
+          // index first; the watch reads it.
+          await ensureClusters(assetsRef.current);
+          if (!cancelled) await startForegroundFallback();
+          return;
+        }
+        stopForegroundFallback(); // upgraded to Always — geofencing takes over
         const pos = await Location.getCurrentPositionAsync({
           accuracy: Location.Accuracy.Balanced,
         });
@@ -114,10 +129,14 @@ export function NotificationOrchestrator() {
     evaluate();
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') evaluate();
+      // The When-In-Use watch stops delivering in the background anyway; drop
+      // it eagerly and let the next foreground re-create it.
+      else stopForegroundFallback();
     });
     return () => {
       cancelled = true;
       sub.remove();
+      stopForegroundFallback();
     };
   }, [enabled, hasAssets]);
 

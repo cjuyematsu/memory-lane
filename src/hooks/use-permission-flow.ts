@@ -76,9 +76,12 @@ export async function requestAllPermissions(): Promise<PermissionResult> {
   };
   return {
     state,
+    // Background location is intentionally not required: without "Always" the
+    // feature still runs in degraded foreground-only mode (a position watch
+    // surfaces the in-app banner while the app is open). The settings sheet
+    // shows a warning for that state instead of refusing to enable.
     ok:
       state.foregroundLocation === 'granted' &&
-      state.backgroundLocation === 'granted' &&
       state.notifications === 'granted',
   };
 }

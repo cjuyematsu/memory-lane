@@ -4,6 +4,7 @@ import {
   Alert,
   Linking,
   Modal,
+  Platform,
   Pressable,
   StyleSheet,
   Switch,
@@ -12,6 +13,7 @@ import {
 } from 'react-native';
 
 import { DisplayFont, Ink, Paper } from '@/constants/theme';
+import { diagnoseAndroidMetadata } from '@/lib/android-metadata-diagnostic';
 import { fireTestNotification, triggerNearestMemoryHere } from '@/lib/geofence-manager';
 import {
   setNotificationsEnabled,
@@ -84,7 +86,9 @@ export function SettingsSheet({
   const degradedReason =
     perm?.notifications !== 'granted'
       ? 'Notifications are off, so memories can’t reach you.'
-      : 'Background location isn’t set to “Always,” so memories will only appear while the app is open.';
+      : // True degradation: the foreground position-watch fallback covers the
+        // app-open case; background geofencing needs "Always".
+        'Background location isn’t set to “Always,” so memories only appear while the app is open.';
 
   return (
     <Modal
@@ -148,6 +152,16 @@ export function SettingsSheet({
                 }}>
                 <Text style={styles.devButtonLabel}>Send test notification</Text>
               </Pressable>
+              {Platform.OS === 'android' ? (
+                <Pressable
+                  style={styles.devButton}
+                  onPress={async () => {
+                    const report = await diagnoseAndroidMetadata();
+                    Alert.alert('Android metadata', report);
+                  }}>
+                  <Text style={styles.devButtonLabel}>Diagnose photo metadata</Text>
+                </Pressable>
+              ) : null}
             </View>
           ) : null}
         </Pressable>
