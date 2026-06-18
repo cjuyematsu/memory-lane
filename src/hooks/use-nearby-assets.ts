@@ -35,6 +35,21 @@ export type NearbyState = {
 
 type Origin = { latitude: number; longitude: number } | null;
 
+// Pure: merge the nearby photos and videos into one list, newest first. The
+// scan surfaces matches newest-first, so a creation-time sort keeps a stable
+// order as results settle (no reshuffling to the top). Missing/zero
+// creationTime is treated as oldest, so undated items sink to the bottom
+// instead of jumping ahead of real dates. Array.prototype.sort is stable
+// (ES2019+), so equal timestamps preserve input order (photos before videos).
+export function mergeNearbyByRecency(
+  photos: NearbyAsset[],
+  videos: NearbyAsset[]
+): NearbyAsset[] {
+  const merged = [...photos, ...videos];
+  merged.sort((a, b) => (b.creationTime ?? 0) - (a.creationTime ?? 0));
+  return merged;
+}
+
 // Building the shared index is the only slow part (first run / library
 // change); querying it for "near here" is pure in-memory math, so we no
 // longer scan progressively — results are computed at once.
@@ -44,6 +59,34 @@ const subscribers = new Set<() => void>();
 
 function notify() {
   for (const fn of subscribers) fn();
+}
+
+// Identity-stable NearbyAsset objects. computeNearby runs again whenever the
+// asset list changes reference; without reuse it would mint a brand-new object
+// for every nearby asset each time, so every grid cell's `memo` would miss and
+// the tile would re-render (and flicker). We keep the previous object whenever
+// the fields the UI actually reads are unchanged. The stale `asset` reference
+// it carries is fine — only `asset.id` is used for rendering, and that's part
+// of the equality check.
+const objCache = new Map<string, NearbyAsset>();
+
+export function sameNearby(a: NearbyAsset, b: NearbyAsset): boolean {
+  return (
+    a.asset.id === b.asset.id &&
+    a.location.latitude === b.location.latitude &&
+    a.location.longitude === b.location.longitude &&
+    a.distance === b.distance &&
+    a.isEstimated === b.isEstimated &&
+    a.creationTime === b.creationTime &&
+    a.mediaType === b.mediaType
+  );
+}
+
+function stableNearby(next: NearbyAsset): NearbyAsset {
+  const prev = objCache.get(next.asset.id);
+  if (prev && sameNearby(prev, next)) return prev;
+  objCache.set(next.asset.id, next);
+  return next;
 }
 
 function nearestIndex(sortedTimes: number[], target: number): number {
@@ -78,26 +121,30 @@ function computeNearby(
     const d = distanceMeters(location, origin);
     if (la.mediaType === MediaType.VIDEO) {
       if (d <= VIDEO_RADIUS_METERS) {
-        videos.push({
-          asset,
-          location,
-          distance: d,
-          isEstimated: false,
-          mediaType: MediaType.VIDEO,
-          creationTime: la.creationTime,
-        });
+        videos.push(
+          stableNearby({
+            asset,
+            location,
+            distance: d,
+            isEstimated: false,
+            mediaType: MediaType.VIDEO,
+            creationTime: la.creationTime,
+          })
+        );
       }
     } else {
       if (la.creationTime != null) anchors.push({ creationTime: la.creationTime, location });
       if (d <= PHOTO_RADIUS_METERS) {
-        photos.push({
-          asset,
-          location,
-          distance: d,
-          isEstimated: false,
-          mediaType: MediaType.IMAGE,
-          creationTime: la.creationTime,
-        });
+        photos.push(
+          stableNearby({
+            asset,
+            location,
+            distance: d,
+            isEstimated: false,
+            mediaType: MediaType.IMAGE,
+            creationTime: la.creationTime,
+          })
+        );
       }
     }
   }
@@ -114,14 +161,16 @@ function computeNearby(
       if (Math.abs(anchor.creationTime - uv.creationTime) > ESTIMATE_WINDOW_MS) continue;
       const d = distanceMeters(anchor.location, origin);
       if (d > VIDEO_RADIUS_METERS) continue;
-      videos.push({
-        asset,
-        location: anchor.location,
-        distance: d,
-        isEstimated: true,
-        mediaType: MediaType.VIDEO,
-        creationTime: uv.creationTime,
-      });
+      videos.push(
+        stableNearby({
+          asset,
+          location: anchor.location,
+          distance: d,
+          isEstimated: true,
+          mediaType: MediaType.VIDEO,
+          creationTime: uv.creationTime,
+        })
+      );
     }
   }
 
@@ -129,6 +178,9 @@ function computeNearby(
 }
 
 export function refreshNearby() {
+  // A manual refresh rebuilds from scratch, so drop the identity cache too —
+  // otherwise a since-edited asset could keep a stale reused object.
+  objCache.clear();
   invalidateIndex();
   if (!latestAssets) {
     notify();

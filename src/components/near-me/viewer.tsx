@@ -50,6 +50,7 @@ export function Viewer({
   isActive = true,
   onClose,
   onOpenMemoryFeed,
+  onIndexChange,
   tapToAdvance = false,
 }: {
   items: NearbyAsset[];
@@ -57,6 +58,10 @@ export function Viewer({
   isActive?: boolean;
   onClose: () => void;
   onOpenMemoryFeed?: (assetId: string) => void;
+  // Reports the photo currently on screen as it changes, so the parent can keep
+  // its "open at" index live — that way reopening (or a remount) restores the
+  // photo you were on, not the one you first tapped.
+  onIndexChange?: (index: number) => void;
   // Story-style navigation: tap right half → next, left half → previous, and
   // horizontal swipe is disabled. Used by the memories view.
   tapToAdvance?: boolean;
@@ -140,6 +145,13 @@ export function Viewer({
     if (uris.length > 0) Image.prefetch(uris).catch(() => {});
   }, [index, items]);
 
+  // Report the on-screen photo up to the parent (fires once per settled swipe),
+  // so reopening — or a remount around the memory feed — lands on the live
+  // photo, not the one first tapped.
+  useEffect(() => {
+    onIndexChange?.(index);
+  }, [index, onIndexChange]);
+
   const jumpTo = (i: number) => {
     setIndex(i);
     pagerRef.current?.scrollToIndex({ index: i, animated: false });
@@ -181,7 +193,17 @@ export function Viewer({
             windowSize={3}
             initialNumToRender={1}
             maxToRenderPerBatch={2}
-            removeClippedSubviews
+            // Intentionally NOT removeClippedSubviews: on a full-screen
+            // horizontal pager it detaches/re-attaches the page on each
+            // swipe-driven re-render, which disturbed the scroll offset and
+            // snapped the pager back to initialScrollIndex (the opened photo).
+            // windowSize={3} keeps only ~3 pages realized, so the cost is tiny.
+            onScrollToIndexFailed={({ index: i }) => {
+              // getItemLayout makes this rare; retry on the next frame.
+              requestAnimationFrame(() =>
+                pagerRef.current?.scrollToIndex({ index: i, animated: false })
+              );
+            }}
             onMomentumScrollEnd={(e) => {
               const next = Math.round(e.nativeEvent.contentOffset.x / width);
               if (next !== index) setIndex(next);
@@ -324,7 +346,9 @@ const ViewerPage = memo(function ViewerPage({
             contentFit="contain"
             cachePolicy="memory-disk"
             transition={0}
-            recyclingKey={item.asset.id}
+            // No recyclingKey: the pager is a paging FlatList (mount/unmount,
+            // not view recycling), where recyclingKey only resets the image to
+            // blank before loading — a flash. It belongs on recycling lists.
             onLoad={(e) => {
               const { width: w, height: h } = e.source ?? {};
               if (w && h) setRatio(w / h);
@@ -383,7 +407,8 @@ const FilmstripThumb = memo(function FilmstripThumb({ item }: { item: NearbyAsse
         contentFit="cover"
         cachePolicy="memory-disk"
         transition={0}
-        recyclingKey={item.asset.id}
+        // No recyclingKey: filmstrip thumbs live in a ScrollView (all mounted,
+        // no recycling), so it would only add the reset-to-blank flash.
       />
       {isVideo ? (
         <View style={styles.thumbPlayBadge} pointerEvents="none">

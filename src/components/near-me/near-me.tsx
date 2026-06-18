@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -14,6 +14,7 @@ import { useAssetFeed } from '@/hooks/use-asset-feed';
 import { useCurrentLocation } from '@/hooks/use-current-location';
 import { useMediaPermission } from '@/hooks/use-media-permission';
 import {
+  mergeNearbyByRecency,
   refreshNearby,
   useNearbyAssets,
   type NearbyAsset,
@@ -43,23 +44,40 @@ export function NearMe({
   const origin = locationState.status === 'ready' ? locationState.coords : null;
   const nearby = useNearbyAssets(assets, origin);
 
-  const items: NearbyAsset[] = useMemo(() => {
-    const merged = [...nearby.photos, ...nearby.videos];
-    // Sort by recency, not distance. The scan surfaces matches newest-first,
-    // so a creation-time sort means progressively-found photos append at the
-    // bottom instead of shuffling to the front (which a distance sort caused).
-    merged.sort((a, b) => (b.creationTime ?? 0) - (a.creationTime ?? 0));
-    return merged;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nearby.photos.length, nearby.videos.length, nearby.status]);
+  // Merge photos + videos newest-first.
+  const itemsRaw: NearbyAsset[] = useMemo(
+    () => mergeNearbyByRecency(nearby.photos, nearby.videos),
+    [nearby.photos, nearby.videos]
+  );
+  // Hold a stable array reference while the ordered set of nearby photos is
+  // unchanged. A background reload re-runs computeNearby and hands us a fresh
+  // array every time; without this, the grid would receive new data and
+  // repaint every tile on each MediaLibrary tick (the flicker). The signature
+  // is the ordered id list, so the memo only yields a new array when the actual
+  // contents/order change — and even then, unchanged tiles keep their object
+  // identity (reused upstream in computeNearby), so only changed cells redraw.
+  const itemsSig = itemsRaw.map((n) => n.asset.id).join('|');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const items: NearbyAsset[] = useMemo(() => itemsRaw, [itemsSig]);
 
+  // The photo the viewer is actually showing: seeded on tap, then the viewer
+  // reports each swipe back here (once per settled swipe — cheap). So if the
+  // viewer ever remounts (e.g. around the memory feed), startIndex restores the
+  // photo you were on, not the one you first tapped. null = closed.
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const pendingCluster = usePendingCluster();
 
+  // Derive a boolean so this only fires when the viewer opens/closes, not on
+  // every swipe-driven viewerIndex change.
+  const viewerOpen = viewerIndex !== null;
   useEffect(() => {
-    onViewerOpenChange?.(viewerIndex !== null);
-  }, [viewerIndex, onViewerOpenChange]);
+    onViewerOpenChange?.(viewerOpen);
+  }, [viewerOpen, onViewerOpenChange]);
+
+  // Stable identity (setViewerIndex is stable) so the memoized Grid isn't
+  // re-rendered just because NearMe re-rendered for some unrelated reason.
+  const openViewer = useCallback((i: number) => setViewerIndex(i), []);
 
   // Floats at the lower-right of the grid as a white pill with a dark bell, so
   // it stays obvious over the photos and matches the gallery theme.
@@ -160,7 +178,7 @@ export function NearMe({
     return items.length > 0 ? (
       <Grid
         items={items}
-        onPressItem={(i) => setViewerIndex(i)}
+        onPressItem={openViewer}
         paddingTop={gridPaddingTop}
         paddingBottom={insets.bottom}
       />
@@ -195,6 +213,7 @@ export function NearMe({
           isActive={isActive}
           onClose={() => setViewerIndex(null)}
           onOpenMemoryFeed={onOpenMemoryFeed}
+          onIndexChange={(i) => setViewerIndex(i)}
         />
       )}
 

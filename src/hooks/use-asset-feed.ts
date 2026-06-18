@@ -104,6 +104,22 @@ let cachedAssets: Asset[] | null = null;
 let inflightReload: Promise<Asset[]> | null = null;
 const subscribers = new Set<(assets: Asset[]) => void>();
 
+// True when two reloads produced the same library, by ordered asset id. The
+// MediaLibrary change listener fires on plenty of events that don't change what
+// we render (iCloud sync ticks, edits elsewhere); if the id-sequence is
+// identical we keep the existing array reference instead of publishing a new
+// one, so nothing downstream (the located index, computeNearby, the grid)
+// re-runs or repaints. This is the first line of defense against the Near Me
+// flicker.
+export function sameAssetIds(a: Asset[], b: Asset[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i].id !== b[i].id) return false;
+  }
+  return true;
+}
+
 function publishAssets(assets: Asset[]) {
   cachedAssets = assets;
   for (const fn of subscribers) fn(assets);
@@ -119,6 +135,11 @@ async function runReload(): Promise<Asset[]> {
         .limit(10000)
         .exe();
       const filtered = await rejectScreenshots(raw);
+      // Library unchanged since last reload → keep the stable reference and
+      // publish nothing, so a spurious change event can't churn the feed.
+      if (cachedAssets && sameAssetIds(cachedAssets, filtered)) {
+        return cachedAssets;
+      }
       publishAssets(filtered);
       return filtered;
     } finally {
