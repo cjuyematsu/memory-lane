@@ -44,6 +44,14 @@ const FILMSTRIP_CHROME = 132; // film button + filmstrip thumbs + paddings
 const STORY_CHROME = 24; // memories mode has no filmstrip, just breathing room
 const CAPTION_RESERVE = 104; // gap + time-ago + place line(s) below the frame
 
+// Cap how tall (narrow) a frame may get. A photo taller than this would be
+// clamped by the available height into a narrow sliver that wastes the screen
+// width; instead we widen the frame to this ratio and let the image cover-crop
+// the excess top/bottom. Photos at this ratio or wider (the common 3:4 = 0.75,
+// 2:3, and all landscape) keep their exact shape and are never cropped — so only
+// genuinely very tall photos (taller than 2:3) lose a little top and bottom.
+const MIN_FRAME_RATIO = 2 / 3;
+
 export function Viewer({
   items: itemsProp,
   startIndex,
@@ -316,16 +324,23 @@ const ViewerPage = memo(function ViewerPage({
   // The black frame hugs each photo's own aspect ratio (the largest box of that
   // shape that fits the available area), instead of forcing a fixed 3:4 box —
   // so off-ratio photos fill the frame edge-to-edge with no awkward black bars.
-  // Defaults to 3:4 until the image reports its dimensions, then snaps to its
-  // real shape. The frame is centered in the band between the header and the
-  // bottom chrome (which reserves room for the caption).
+  // Very tall photos (taller than MIN_FRAME_RATIO) are the exception: hugging
+  // them would clamp the frame to a narrow sliver that wastes the screen width,
+  // so they're widened to the cap and cover-cropped (below) to fill it. Defaults
+  // to 3:4 until the image reports its dimensions, then snaps to its real shape.
+  // The frame is centered in the band between the header and the bottom chrome
+  // (which reserves room for the caption).
   const top0 = frameTop(insets.top);
   const available = Math.max(
     0,
     height - top0 - bottomChrome - insets.bottom - CAPTION_RESERVE
   );
   const maxFrameW = width - 2 * FrameMargin;
-  const r = ratio ?? PhotoRatio;
+  const realR = ratio ?? PhotoRatio;
+  // Never let the frame get narrower than the cap; a too-tall photo is widened to
+  // MIN_FRAME_RATIO and cover-cropped rather than shrunk to a width-wasting sliver.
+  const r = Math.max(realR, MIN_FRAME_RATIO);
+  const cropped = realR < MIN_FRAME_RATIO;
   let frameW = maxFrameW;
   let frameH = frameW / r;
   if (frameH > available) {
@@ -343,7 +358,10 @@ const ViewerPage = memo(function ViewerPage({
           <Image
             source={{ uri: thumbnailUri }}
             style={StyleSheet.absoluteFill}
-            contentFit="contain"
+            // Tall photos are capped to a wider frame, so cover-crop them to fill
+            // it; everything else hugs its exact ratio, where contain fills with
+            // no crop.
+            contentFit={cropped ? 'cover' : 'contain'}
             cachePolicy="memory-disk"
             transition={0}
             // No recyclingKey: the pager is a paging FlatList (mount/unmount,
@@ -356,7 +374,7 @@ const ViewerPage = memo(function ViewerPage({
           />
         ) : null}
         {isVideo && isCurrent && isActive && playbackUri ? (
-          <ViewerVideo uri={playbackUri} />
+          <ViewerVideo uri={playbackUri} contentFit={cropped ? 'cover' : 'contain'} />
         ) : null}
       </PhotoFrame>
 
@@ -379,7 +397,7 @@ const ViewerPage = memo(function ViewerPage({
   );
 });
 
-function ViewerVideo({ uri }: { uri: string }) {
+function ViewerVideo({ uri, contentFit }: { uri: string; contentFit: 'cover' | 'contain' }) {
   const player = useVideoPlayer(uri, (p) => {
     p.loop = true;
     p.muted = true;
@@ -391,7 +409,7 @@ function ViewerVideo({ uri }: { uri: string }) {
       key={uri}
       player={player}
       style={StyleSheet.absoluteFill}
-      contentFit="contain"
+      contentFit={contentFit}
       nativeControls={false}
     />
   );

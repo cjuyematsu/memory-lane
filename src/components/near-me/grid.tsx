@@ -1,5 +1,5 @@
 import { memo, useCallback } from 'react';
-import { Pressable, RefreshControl, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 
 import { FlashList, type ListRenderItem } from '@shopify/flash-list';
 import { Image } from 'expo-image';
@@ -32,9 +32,15 @@ const GAP = 2; // hairline gutter between tiles, like the Photos grid
 // a new index-0 tile lands at the top of the viewport instead of being anchored
 // above it.
 //
-// Tiles are sized explicitly to width / COLUMNS so three fill a row exactly (no
-// sub-pixel slivers); the gutter is an inner margin, so the gaps show the Paper
-// canvas rather than the placeholder gray.
+// Each tile fills its FlashList-enforced column slot (`width: '100%'` + a square
+// `aspectRatio`) rather than a hand-computed `useWindowDimensions().width /
+// COLUMNS` pixel size. FlashList already wraps every cell in a View it sizes to
+// its own measured width / COLUMNS; on Android that measured width and the window
+// width don't always agree (display cutouts, insets, rounding), so a fixed
+// per-cell pixel width left some columns visibly narrower than their slot. Filling
+// the slot keeps all three columns identical on both platforms (pixel-identical on
+// iOS, where the two widths already match). The gutter is an inner margin, so the
+// gaps show the Paper canvas rather than the placeholder gray.
 export const Grid = memo(function Grid({
   items,
   onPressItem,
@@ -52,14 +58,9 @@ export const Grid = memo(function Grid({
   onRefresh?: () => void;
   refreshing?: boolean;
 }) {
-  const { width } = useWindowDimensions();
-  const size = width / COLUMNS;
-
   const renderItem = useCallback<ListRenderItem<NearbyAsset>>(
-    ({ item, index }) => (
-      <GridCell item={item} index={index} size={size} onPress={onPressItem} />
-    ),
-    [size, onPressItem]
+    ({ item, index }) => <GridCell item={item} index={index} onPress={onPressItem} />,
+    [onPressItem]
   );
 
   return (
@@ -95,19 +96,17 @@ const keyExtractor = (it: NearbyAsset) => it.asset.id;
 const GridCell = memo(function GridCell({
   item,
   index,
-  size,
   onPress,
 }: {
   item: NearbyAsset;
   index: number;
-  size: number;
   // Stable across renders (the parent passes one callback for the whole grid),
   // so this cell's memo holds and the tile doesn't re-render needlessly.
   onPress: (index: number) => void;
 }) {
   const isVideo = item.mediaType === MediaType.VIDEO;
   return (
-    <Pressable onPress={() => onPress(index)} style={{ width: size, height: size }}>
+    <Pressable onPress={() => onPress(index)} style={styles.cell}>
       <View style={styles.cellInner}>
         <Image
           source={{ uri: item.asset.id }}
@@ -130,6 +129,14 @@ const styles = StyleSheet.create({
   panel: {
     flex: 1,
     backgroundColor: Paper,
+  },
+  // Fill the column slot FlashList lays out for this cell (its ViewHolder is
+  // sized to measuredWidth / COLUMNS) and stay square — so every tile is exactly
+  // one slot wide on both platforms, with no fixed pixel width to disagree with
+  // the slot on Android.
+  cell: {
+    width: '100%',
+    aspectRatio: 1,
   },
   cellInner: {
     flex: 1,
