@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, AppState, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import BellIcon from '@/assets/icons/bell.svg';
+import RefreshIcon from '@/assets/icons/refresh.svg';
 import { frameTop } from '@/components/feed/photo-frame';
 import { ClusterView } from '@/components/near-me/cluster-view';
 import { Grid } from '@/components/near-me/grid';
@@ -19,6 +20,13 @@ import {
   useNearbyAssets,
   type NearbyAsset,
 } from '@/hooks/use-nearby-assets';
+
+// The grid renders a frozen snapshot; a stable empty array keeps the memoized
+// Grid from re-rendering before the first real snapshot lands.
+const EMPTY: NearbyAsset[] = [];
+// How long after a refresh trigger we keep adopting freshly-computed results
+// before freezing again — covers the GPS fix + 300ms feed debounce + index sync.
+const SETTLE_MS = 600;
 
 export function NearMe({
   isActive = true,
@@ -60,6 +68,77 @@ export function NearMe({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const items: NearbyAsset[] = useMemo(() => itemsRaw, [itemsSig]);
 
+  // --- Frozen display snapshot ------------------------------------------------
+  // The grid shows a snapshot of `items`, refreshed only on (1) first load,
+  // (2) app foreground, and (3) an explicit user refresh — never on passive
+  // library changes (a photo taken/deleted while the app is open). The live
+  // `useNearbyAssets` above keeps running on LIVE assets, so the shared located
+  // index that the geofence notifications read stays current; we freeze only
+  // what's displayed.
+  const [displayItems, setDisplayItems] = useState<NearbyAsset[] | null>(null);
+  // `accepting` opens a short window (after a trigger) during which we adopt each
+  // freshly-settled `items` into the snapshot; outside it the grid is frozen.
+  const [accepting, setAccepting] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  // Token guards the settle timer so overlapping refreshes extend the window and a
+  // stale timer only closes the window it opened.
+  const acceptSeq = useRef(0);
+  const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const arm = useCallback(() => {
+    const token = (acceptSeq.current += 1);
+    setAccepting(true);
+    if (settleTimer.current) clearTimeout(settleTimer.current);
+    settleTimer.current = setTimeout(() => {
+      if (acceptSeq.current === token) {
+        setAccepting(false);
+        setRefreshing(false);
+      }
+    }, SETTLE_MS);
+  }, []);
+
+  // Adopt the live list into the snapshot during render — React's supported way to
+  // derive state from changing inputs (no effect, so no cascading-render warning).
+  // Seed the first time data is ready, then only while a refresh window is open.
+  // The `displayItems !== items` guard makes it self-terminating; when the window
+  // is closed, passive library recomputes hand us a new `items` we simply ignore.
+  if (nearby.status === 'ready' && displayItems !== items && (accepting || displayItems === null)) {
+    setDisplayItems(items);
+  }
+
+  // Re-fetch on app foreground ("open the app") — re-snapshot, no spinner.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s === 'active') {
+        refreshLocation();
+        arm();
+      }
+    });
+    return () => sub.remove();
+  }, [arm, refreshLocation]);
+
+  // Clear any pending settle timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (settleTimer.current) clearTimeout(settleTimer.current);
+    };
+  }, []);
+
+  // Explicit user refresh (pull-to-refresh, the refresh pill, and the empty-state
+  // button all route here): refetch location + library, rebuild the index, and
+  // adopt the fresh result while the settle window is open.
+  const onUserRefresh = useCallback(() => {
+    setRefreshing(true);
+    arm();
+    refreshLocation();
+    refreshNearby();
+    void reloadFeed();
+  }, [arm, refreshLocation, reloadFeed]);
+
+  // What the grid/viewer actually render: the frozen snapshot (or a stable empty
+  // array until the first seed).
+  const view = displayItems ?? EMPTY;
+
   // The photo the viewer is actually showing: seeded on tap, then the viewer
   // reports each swipe back here (once per settled swipe — cheap). So if the
   // viewer ever remounts (e.g. around the memory feed), startIndex restores the
@@ -87,6 +166,17 @@ export function NearMe({
       style={[styles.notificationsBtn, { bottom: insets.bottom + 16, right: FrameMargin + 6 }]}
       hitSlop={12}>
       <BellIcon width={22} height={22} fill={Ink} />
+    </Pressable>
+  );
+
+  // Sits just above the bell as a matching pill: a manual refresh for the frozen
+  // grid (pull-to-refresh does the same and shares the `refreshing` spinner).
+  const refreshButton = (
+    <Pressable
+      onPress={onUserRefresh}
+      style={[styles.notificationsBtn, { bottom: insets.bottom + 16 + 56, right: FrameMargin + 6 }]}
+      hitSlop={12}>
+      <RefreshIcon width={22} height={22} fill={Ink} />
     </Pressable>
   );
 
@@ -150,11 +240,18 @@ export function NearMe({
         </SafeAreaView>
       );
     }
+    // Initial load only: before the first snapshot exists, show a centered
+    // spinner while permissions/location/feed settle. Once we have a snapshot,
+    // a refresh must NOT fall back here — refreshLocation() flips location to
+    // 'requesting' synchronously, which would blank the whole grid to white
+    // before the photos reload. Instead keep the frozen grid on screen and let
+    // the pull-to-refresh spinner (above the photos) indicate the work.
     if (
-      locationState.status === 'idle' ||
-      locationState.status === 'requesting' ||
-      feedState.status === 'idle' ||
-      feedState.status === 'loading'
+      displayItems === null &&
+      (locationState.status === 'idle' ||
+        locationState.status === 'requesting' ||
+        feedState.status === 'idle' ||
+        feedState.status === 'loading')
     ) {
       return (
         <View style={styles.center}>
@@ -172,26 +269,23 @@ export function NearMe({
         </SafeAreaView>
       );
     }
-    // Stable order thanks to the recency sort. Spinner only while we have
-    // nothing yet and the scan is still running; empty state only once the
-    // scan is fully done with no matches.
-    return items.length > 0 ? (
+    // The grid renders the frozen snapshot (`view`). The empty state appears
+    // only once we've seeded a snapshot and it's genuinely empty; before the
+    // first seed we're still loading, so show the spinner.
+    return view.length > 0 ? (
       <Grid
-        items={items}
+        items={view}
         onPressItem={openViewer}
         paddingTop={gridPaddingTop}
         paddingBottom={insets.bottom}
+        onRefresh={onUserRefresh}
+        refreshing={refreshing}
       />
-    ) : nearby.status === 'ready' ? (
+    ) : displayItems !== null ? (
       <SafeAreaView style={styles.empty}>
         <Text style={styles.emptyTitle}>Nothing here yet</Text>
         <Text style={styles.emptySub}>No photos or videos nearby.</Text>
-        <Pressable
-          onPress={() => {
-            refreshNearby();
-            refreshLocation();
-          }}
-          style={styles.button}>
+        <Pressable onPress={onUserRefresh} style={styles.button}>
           <Text style={styles.buttonLabel}>Refresh</Text>
         </Pressable>
       </SafeAreaView>
@@ -206,10 +300,10 @@ export function NearMe({
     <View style={styles.container}>
       {body}
 
-      {viewerIndex !== null && items.length > 0 && (
+      {viewerIndex !== null && view.length > 0 && (
         <Viewer
-          items={items}
-          startIndex={Math.max(0, Math.min(viewerIndex, items.length - 1))}
+          items={view}
+          startIndex={Math.max(0, Math.min(viewerIndex, view.length - 1))}
           isActive={isActive}
           onClose={() => setViewerIndex(null)}
           onOpenMemoryFeed={onOpenMemoryFeed}
@@ -217,9 +311,14 @@ export function NearMe({
         />
       )}
 
-      {/* Hide the bell while memories or a full-screen photo are open (it would
-          otherwise float over them via its zIndex). */}
-      {!pendingCluster && viewerIndex === null ? notificationsButton : null}
+      {/* Hide the bell + refresh pill while memories or a full-screen photo are
+          open (they would otherwise float over them via zIndex). */}
+      {!pendingCluster && viewerIndex === null ? (
+        <>
+          {refreshButton}
+          {notificationsButton}
+        </>
+      ) : null}
       {settingsSheet}
 
       {/* Memories cluster view: a tapped notification routes here. Rendered as

@@ -11,11 +11,14 @@ import {
 } from '@/hooks/use-located-assets';
 import { distanceMeters } from '@/utils/distance';
 
-// Near Me deliberately casts a wide net ("photos around this area"), in
-// contrast to the memories story which is scoped to a tight ~50m cluster cell.
-// Tune these two if Near Me feels too broad or too narrow.
-export const PHOTO_RADIUS_METERS = 500;
-export const VIDEO_RADIUS_METERS = 1000;
+// Near Me shows what you took right where you're standing — meant to feel like
+// walking around campus, so it's tight: ~150m, roughly the building cluster
+// you're in, not the whole neighborhood. One radius for photos and videos alike:
+// videos used to reach twice as far (1000m vs 500m), which surfaced real-GPS
+// clips from ~a mile away (e.g. an old high school). The memories story is
+// tighter still (~50m cluster cells). Tune this if Near Me feels too broad or
+// too narrow (the boundary tests in use-nearby-assets.test.ts assert this value).
+export const NEAR_ME_RADIUS_METERS = 150;
 const ESTIMATE_WINDOW_MS = 30 * 60 * 1000;
 
 export type NearbyAsset = {
@@ -103,7 +106,7 @@ function nearestIndex(sortedTimes: number[], target: number): number {
   return lo;
 }
 
-function computeNearby(
+export function computeNearby(
   index: AssetIndex,
   assets: Asset[],
   origin: { latitude: number; longitude: number }
@@ -120,7 +123,7 @@ function computeNearby(
     const location: AssetLocation = { latitude: la.lat, longitude: la.lng };
     const d = distanceMeters(location, origin);
     if (la.mediaType === MediaType.VIDEO) {
-      if (d <= VIDEO_RADIUS_METERS) {
+      if (d <= NEAR_ME_RADIUS_METERS) {
         videos.push(
           stableNearby({
             asset,
@@ -134,7 +137,7 @@ function computeNearby(
       }
     } else {
       if (la.creationTime != null) anchors.push({ creationTime: la.creationTime, location });
-      if (d <= PHOTO_RADIUS_METERS) {
+      if (d <= NEAR_ME_RADIUS_METERS) {
         photos.push(
           stableNearby({
             asset,
@@ -160,7 +163,7 @@ function computeNearby(
       if (!anchor) continue;
       if (Math.abs(anchor.creationTime - uv.creationTime) > ESTIMATE_WINDOW_MS) continue;
       const d = distanceMeters(anchor.location, origin);
-      if (d > VIDEO_RADIUS_METERS) continue;
+      if (d > NEAR_ME_RADIUS_METERS) continue;
       videos.push(
         stableNearby({
           asset,

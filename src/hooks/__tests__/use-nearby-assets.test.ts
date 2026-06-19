@@ -1,5 +1,10 @@
+import { MediaType, type Asset } from 'expo-media-library';
+
+import type { AssetIndex } from '@/hooks/use-located-assets';
 import {
+  computeNearby,
   mergeNearbyByRecency,
+  NEAR_ME_RADIUS_METERS,
   sameNearby,
   type NearbyAsset,
 } from '@/hooks/use-nearby-assets';
@@ -142,5 +147,81 @@ describe('sameNearby', () => {
         mediaType: 1 as unknown as NearbyAsset['mediaType'],
       })
     ).toBe(false);
+  });
+});
+
+describe('computeNearby radius', () => {
+  const origin = { latitude: 40, longitude: -75 };
+  // 1 degree of latitude is ~111.2 km, so these north offsets are ~111m,
+  // ~445m, and ~1112m from the origin.
+  const M111 = 40.001;
+  const M445 = 40.004;
+  const M1112 = 40.01;
+
+  const located = (
+    id: string,
+    lat: number,
+    kind: 'photo' | 'video',
+    creationTime: number | null = 1000
+  ) => ({
+    id,
+    lat,
+    lng: -75,
+    creationTime,
+    mediaType: kind === 'video' ? MediaType.VIDEO : MediaType.IMAGE,
+  });
+
+  const indexOf = (entries: ReturnType<typeof located>[]): AssetIndex =>
+    ({
+      located: entries,
+      unlocatedVideos: [],
+      processedIds: entries.map((e) => e.id),
+    }) as AssetIndex;
+
+  const assetsOf = (ids: string[]) => ids.map((id) => ({ id }) as Asset);
+
+  it('is 150m', () => {
+    expect(NEAR_ME_RADIUS_METERS).toBe(150);
+  });
+
+  it('keeps photos within the radius and drops the rest', () => {
+    const index = indexOf([located('near', M111, 'photo'), located('far', M1112, 'photo')]);
+    const { photos } = computeNearby(index, assetsOf(['near', 'far']), origin);
+    expect(photos.map((p) => p.asset.id)).toEqual(['near']);
+  });
+
+  it('drops a real-GPS video ~445m away (the high-school case; was inside the old 1000m)', () => {
+    const index = indexOf([located('hs-video', M445, 'video')]);
+    const { videos } = computeNearby(index, assetsOf(['hs-video']), origin);
+    expect(videos).toEqual([]);
+  });
+
+  it('keeps a video within the radius', () => {
+    const index = indexOf([located('close-video', M111, 'video')]);
+    const { videos } = computeNearby(index, assetsOf(['close-video']), origin);
+    expect(videos.map((v) => v.asset.id)).toEqual(['close-video']);
+  });
+
+  it('applies the same radius to estimated (GPS-less) videos', () => {
+    // The unlocated video borrows its nearest-in-time photo's location; with the
+    // only anchor ~1112m away, the estimate lands outside the radius → excluded.
+    const index: AssetIndex = {
+      located: [located('far-anchor', M1112, 'photo', 5000)],
+      unlocatedVideos: [{ id: 'uv', creationTime: 5000 }],
+      processedIds: ['far-anchor', 'uv'],
+    };
+    const { videos } = computeNearby(index, assetsOf(['far-anchor', 'uv']), origin);
+    expect(videos).toEqual([]);
+  });
+
+  it('includes an estimated video when its anchor is within the radius', () => {
+    const index: AssetIndex = {
+      located: [located('near-anchor', M111, 'photo', 5000)],
+      unlocatedVideos: [{ id: 'uv2', creationTime: 5000 }],
+      processedIds: ['near-anchor', 'uv2'],
+    };
+    const { videos } = computeNearby(index, assetsOf(['near-anchor', 'uv2']), origin);
+    expect(videos.map((v) => v.asset.id)).toEqual(['uv2']);
+    expect(videos[0].isEstimated).toBe(true);
   });
 });
