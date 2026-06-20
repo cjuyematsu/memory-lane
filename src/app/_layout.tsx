@@ -15,7 +15,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import { MemoryBanner } from '@/components/notifications/memory-banner';
 import { NotificationOrchestrator } from '@/components/notifications/notification-orchestrator';
-import { configureImageCache } from '@/lib/image-cache';
+import { configureImageCache, installMemoryCacheReaper } from '@/lib/image-cache';
 import { runOnboardingPermissions } from '@/lib/onboarding-permissions';
 
 // Bound the expo-image disk cache once, before any photo renders, so it can't
@@ -34,6 +34,12 @@ export default function RootLayout() {
   // notifications) once per launch. Idempotent, so re-mounts are harmless.
   useEffect(() => {
     runOnboardingPermissions();
+  }, []);
+  // Drop the decoded-image memory cache whenever the app backgrounds, so a
+  // large foreground working set can't get the app jetsammed while suspended.
+  useEffect(() => {
+    const sub = installMemoryCacheReaper();
+    return () => sub.remove();
   }, []);
   // Hold the content until the font is ready so the first paint already uses it
   // (otherwise the nav flashes the fallback font until something re-renders).

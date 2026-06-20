@@ -21,6 +21,21 @@ const locationInflight = new Map<string, Promise<AssetLocation | null>>();
 const timeCache = new Map<string, number | null>();
 const timeInflight = new Map<string, Promise<number | null>>();
 
+// Bound the metadata caches so they can't grow one entry per asset forever
+// across a huge library (every card that scrolls past writes to them). FIFO:
+// once a map is full, drop the oldest entry before inserting a new key. The
+// values are tiny and cheap to re-derive on a future revisit, so eviction is
+// invisible. The in-flight maps self-clean (deleted in `finally`) and are
+// inherently small, so they don't need this.
+const MAX_METADATA_ENTRIES = 5000;
+function cappedSet<V>(map: Map<string, V>, key: string, value: V): void {
+  if (!map.has(key) && map.size >= MAX_METADATA_ENTRIES) {
+    const oldest = map.keys().next().value;
+    if (oldest !== undefined) map.delete(oldest);
+  }
+  map.set(key, value);
+}
+
 export type AssetTimeLocation = {
   creationTime: number | null;
   location: AssetLocation | null;
@@ -65,7 +80,7 @@ export async function loadAssetIsInCloud(asset: Asset): Promise<boolean> {
   const p = (async () => {
     try {
       const inCloud = await asset.getIsInCloud().catch(() => false);
-      inCloudCache.set(asset.id, inCloud);
+      cappedSet(inCloudCache, asset.id, inCloud);
       return inCloud;
     } finally {
       inCloudInflight.delete(asset.id);
@@ -91,7 +106,7 @@ export async function loadAssetLocation(asset: Asset): Promise<AssetLocation | n
   const p = (async () => {
     try {
       const loc = await asset.getLocation().catch(() => null);
-      locationCache.set(asset.id, loc);
+      cappedSet(locationCache, asset.id, loc);
       return loc;
     } finally {
       locationInflight.delete(asset.id);
@@ -111,7 +126,7 @@ export async function loadAssetCreationTime(asset: Asset): Promise<number | null
   const p = (async () => {
     try {
       const t = await asset.getCreationTime().catch(() => null);
-      timeCache.set(asset.id, t);
+      cappedSet(timeCache, asset.id, t);
       return t;
     } finally {
       timeInflight.delete(asset.id);
@@ -155,7 +170,7 @@ export async function hydrateAsset(asset: Asset): Promise<AssetMetadata> {
           location,
           mediaType,
         };
-        fullCache.set(asset.id, meta);
+        cappedSet(fullCache, asset.id, meta);
         return meta;
       }
 
@@ -179,8 +194,8 @@ export async function hydrateAsset(asset: Asset): Promise<AssetMetadata> {
         location: locationFromCache,
         mediaType,
       };
-      fullCache.set(asset.id, meta);
-      if (!locationCache.has(asset.id)) locationCache.set(asset.id, meta.location);
+      cappedSet(fullCache, asset.id, meta);
+      if (!locationCache.has(asset.id)) cappedSet(locationCache, asset.id, meta.location);
       return meta;
     } finally {
       fullInflight.delete(asset.id);
