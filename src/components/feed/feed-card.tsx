@@ -1,5 +1,5 @@
 import { memo, useContext, useEffect, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
@@ -11,6 +11,7 @@ import { VideoView, useVideoPlayer } from 'expo-video';
 
 import { FeedCardEventsContext } from '@/components/feed/feed-context';
 import { PhotoFrame, type FrameLayout } from '@/components/feed/photo-frame';
+import { PinchZoom } from '@/components/pinch-zoom';
 import { DisplayFont, FrameMargin, Ink, Paper } from '@/constants/theme';
 import { useAssetMetadata, usePlaybackUri } from '@/hooks/use-asset-metadata';
 import { useReverseGeocode } from '@/hooks/use-reverse-geocode';
@@ -28,6 +29,7 @@ export const FeedCard = memo(function FeedCard({
   width,
   height,
   frame,
+  onZoomChange,
 }: {
   asset: Asset;
   isCurrent: boolean;
@@ -35,6 +37,7 @@ export const FeedCard = memo(function FeedCard({
   width: number;
   height: number;
   frame: FrameLayout;
+  onZoomChange?: (active: boolean) => void;
 }) {
   const meta = useAssetMetadata(asset);
   const placeName = useReverseGeocode(meta?.location ?? null);
@@ -83,35 +86,52 @@ export const FeedCard = memo(function FeedCard({
   const opacityStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
 
   useEffect(() => {
-    if (!visible) return;
-    opacity.value = 1;
-    onCardReady(asset.id);
-  }, [visible, opacity, onCardReady, asset.id]);
+    if (visible) opacity.value = 1;
+  }, [visible, opacity]);
+
+  // Announce readiness only as the current card (re-announcing when becoming
+  // current, since a shuffle can land on an already-loaded card whose state
+  // never flips again), and only on a real image result (load or error) — not
+  // on the safety-visibility timeout. The feed holds its crossfade overlay
+  // and the shuffle gate on this signal; announcing a bare frame made the
+  // overlay reveal exactly that.
+  useEffect(() => {
+    if (imageReady && isCurrent) onCardReady(asset.id);
+  }, [imageReady, isCurrent, onCardReady, asset.id]);
 
   const captionTop = frame.top + frame.height + 24;
 
   return (
     <Animated.View style={[styles.container, { width, height }, opacityStyle]}>
       <PhotoFrame top={frame.top} left={frame.left} width={frame.width} height={frame.height}>
-        {thumbnailUri ? (
-          <Image
-            source={{ uri: thumbnailUri }}
-            style={StyleSheet.absoluteFill}
-            contentFit={isLandscape ? 'contain' : 'cover'}
-            cachePolicy={isCurrent ? 'memory-disk' : 'disk'}
-            transition={0}
-            recyclingKey={asset.id}
-            onLoad={(e) => {
-              const { width: w, height: h } = e.source ?? {};
-              if (w && h) setIsLandscape(w > h);
-              setImageReady(true);
-            }}
-            onError={() => setImageReady(true)}
-          />
-        ) : null}
-        {isVideo && isCurrent && isActive && playbackUri ? (
-          <FeedVideo uri={playbackUri} contain={isLandscape} />
-        ) : null}
+        <PinchZoom onActiveChange={onZoomChange}>
+          {thumbnailUri ? (
+            <Image
+              source={{ uri: thumbnailUri }}
+              style={StyleSheet.absoluteFill}
+              contentFit={isLandscape ? 'contain' : 'cover'}
+              cachePolicy={isCurrent ? 'memory-disk' : 'disk'}
+              transition={0}
+              recyclingKey={asset.id}
+              onLoad={(e) => {
+                const { width: w, height: h } = e.source ?? {};
+                if (w && h) setIsLandscape(w > h);
+                setImageReady(true);
+              }}
+              onError={() => setImageReady(true)}
+            />
+          ) : null}
+          {isVideo && isCurrent && isActive && playbackUri ? (
+            <FeedVideo uri={playbackUri} contain={isLandscape} />
+          ) : null}
+          {/* Only ever seen when the safety timeout reveals the card before its
+              image decoded (slow iCloud loads) — a bare black frame otherwise. */}
+          {!imageReady ? (
+            <View style={styles.loading} pointerEvents="none">
+              <ActivityIndicator color={Paper} />
+            </View>
+          ) : null}
+        </PinchZoom>
       </PhotoFrame>
 
       {overlayReady ? (
@@ -153,6 +173,15 @@ function FeedVideo({ uri, contain }: { uri: string; contain: boolean }) {
 const styles = StyleSheet.create({
   container: {
     backgroundColor: Paper,
+  },
+  loading: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   caption: {
     position: 'absolute',

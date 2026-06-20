@@ -41,6 +41,40 @@ export function getCachedMetadata(assetId: string): AssetMetadata | undefined {
   return fullCache.get(assetId);
 }
 
+const inCloudCache = new Map<string, boolean>();
+const inCloudInflight = new Map<string, Promise<boolean>>();
+
+/** Synchronous read of a previously-checked iCloud status; undefined if never
+ *  checked. Non-iOS platforms have no iCloud, so everything reads as local. */
+export function getCachedIsInCloud(assetId: string): boolean | undefined {
+  if (Platform.OS !== 'ios') return false;
+  return inCloudCache.get(assetId);
+}
+
+// True when the photo's original is iCloud-resident (not on device), meaning
+// rendering it requires a network download first. iOS-only signal — Android
+// has no equivalent, so everything counts as local there. Errors also resolve
+// to local, so a failed check can only over-include a photo, never hide it.
+export async function loadAssetIsInCloud(asset: Asset): Promise<boolean> {
+  if (Platform.OS !== 'ios') return false;
+  const cached = inCloudCache.get(asset.id);
+  if (cached !== undefined) return cached;
+  const existing = inCloudInflight.get(asset.id);
+  if (existing) return existing;
+
+  const p = (async () => {
+    try {
+      const inCloud = await asset.getIsInCloud().catch(() => false);
+      inCloudCache.set(asset.id, inCloud);
+      return inCloud;
+    } finally {
+      inCloudInflight.delete(asset.id);
+    }
+  })();
+  inCloudInflight.set(asset.id, p);
+  return p;
+}
+
 export function getCachedLocation(assetId: string): AssetLocation | null | undefined {
   if (locationCache.has(assetId)) return locationCache.get(assetId);
   const full = fullCache.get(assetId);
