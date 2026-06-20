@@ -47,6 +47,9 @@ export function TopTabs() {
   );
   const [memoryEntry, setMemoryEntry] = useState<string | null>(null);
   const [nearMeViewerOpen, setNearMeViewerOpen] = useState(false);
+  // True while a feed card (main pager or memory overlay) is being pinch-zoomed,
+  // so a two-finger zoom can't also swipe between tabs or close the overlay.
+  const [feedZooming, setFeedZooming] = useState(false);
 
   const tabX = useSharedValue(0);
   const overlayX = useSharedValue(width);
@@ -89,7 +92,7 @@ export function TopTabs() {
     // Disabled while a memory feed or the notification cluster view is open,
     // so you can't swipe between tabs to escape memories — you must back out
     // of the memory view first (and out of any open photo before that).
-    .enabled(memoryEntry == null && !pendingCluster && !nearMeViewerOpen)
+    .enabled(memoryEntry == null && !pendingCluster && !nearMeViewerOpen && !feedZooming)
     .activeOffsetX([-15, 15])
     .failOffsetY([-20, 20])
     .onUpdate((e) => {
@@ -111,7 +114,7 @@ export function TopTabs() {
   const overlayPan = Gesture.Pan()
     // Mirror image of the tabPan disable: the overlay gesture should only
     // be live when the memory feed is actually open.
-    .enabled(memoryEntry != null)
+    .enabled(memoryEntry != null && !feedZooming)
     // `activeOffsetX(30)` (single positive number) means the gesture only
     // activates after 30px of *rightward* travel. The previous array form
     // `[30, 9999]` is malformed per RNGH's spec (first value must be ≤ 0)
@@ -149,7 +152,10 @@ export function TopTabs() {
           style={[styles.pager, { width: width * 2 }, tabsStyle]}
           pointerEvents={memoryEntry ? 'none' : 'auto'}>
           <View style={{ width }}>
-            <Feed isActive={tab === 'cameraRoll' && !memoryEntry} />
+            <Feed
+              isActive={tab === 'cameraRoll' && !memoryEntry}
+              onZoomChange={setFeedZooming}
+            />
           </View>
           <View style={{ width }}>
             <NearMe
@@ -171,6 +177,7 @@ export function TopTabs() {
                 startAssetId={memoryEntry}
                 rememberLastPosition={false}
                 showShuffle={false}
+                onZoomChange={setFeedZooming}
               />
               <SafeAreaView style={styles.backWrap} pointerEvents="box-none">
                 <Pressable onPress={closeOverlay} style={styles.backBtn} hitSlop={12}>

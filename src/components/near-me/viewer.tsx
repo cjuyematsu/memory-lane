@@ -25,6 +25,7 @@ import { scheduleOnRN } from 'react-native-worklets';
 
 import FilmIcon from '@/assets/icons/film.svg';
 import { PhotoFrame, frameTop } from '@/components/feed/photo-frame';
+import { PinchZoom } from '@/components/pinch-zoom';
 import { DisplayFont, FrameMargin, Ink, Paper, PhotoRatio } from '@/constants/theme';
 import { usePlaybackUri } from '@/hooks/use-asset-metadata';
 import { useReverseGeocode } from '@/hooks/use-reverse-geocode';
@@ -82,6 +83,9 @@ export function Viewer({
   // photo. Snapshot on open; closing and reopening picks up any new photos.
   const [items] = useState(() => itemsProp);
   const [index, setIndex] = useState(startIndex);
+  // True while a pinch-zoom is in progress; gates the dismiss pan and the pager so
+  // a two-finger zoom can't also drag-to-close or page to the next photo.
+  const [zooming, setZooming] = useState(false);
   const pagerRef = useRef<FlatList<NearbyAsset>>(null);
   const filmRef = useRef<ScrollView>(null);
 
@@ -108,6 +112,7 @@ export function Viewer({
   };
 
   const pan = Gesture.Pan()
+    .enabled(!zooming)
     .activeOffsetY([-15, 15])
     .failOffsetX([-20, 20])
     .onUpdate((e) => {
@@ -182,7 +187,7 @@ export function Viewer({
             data={items}
             horizontal
             pagingEnabled
-            scrollEnabled={!tapToAdvance}
+            scrollEnabled={!tapToAdvance && !zooming}
             showsHorizontalScrollIndicator={false}
             initialScrollIndex={startIndex}
             getItemLayout={(_, i) => ({ length: width, offset: width * i, index: i })}
@@ -195,6 +200,7 @@ export function Viewer({
                 width={width}
                 height={height}
                 bottomChrome={tapToAdvance ? STORY_CHROME : FILMSTRIP_CHROME}
+                onZoomChange={setZooming}
               />
             )}
             extraData={index}
@@ -304,6 +310,7 @@ const ViewerPage = memo(function ViewerPage({
   width,
   height,
   bottomChrome,
+  onZoomChange,
 }: {
   item: NearbyAsset;
   isCurrent: boolean;
@@ -311,6 +318,7 @@ const ViewerPage = memo(function ViewerPage({
   width: number;
   height: number;
   bottomChrome: number;
+  onZoomChange: (active: boolean) => void;
 }) {
   const insets = useSafeAreaInsets();
   const placeName = useReverseGeocode(item.location);
@@ -354,28 +362,30 @@ const ViewerPage = memo(function ViewerPage({
   return (
     <View style={{ width, height, backgroundColor: Paper }}>
       <PhotoFrame screenW={width} top={top} width={frameW} height={frameH} left={frameLeft}>
-        {thumbnailUri ? (
-          <Image
-            source={{ uri: thumbnailUri }}
-            style={StyleSheet.absoluteFill}
-            // Tall photos are capped to a wider frame, so cover-crop them to fill
-            // it; everything else hugs its exact ratio, where contain fills with
-            // no crop.
-            contentFit={cropped ? 'cover' : 'contain'}
-            cachePolicy="memory-disk"
-            transition={0}
-            // No recyclingKey: the pager is a paging FlatList (mount/unmount,
-            // not view recycling), where recyclingKey only resets the image to
-            // blank before loading — a flash. It belongs on recycling lists.
-            onLoad={(e) => {
-              const { width: w, height: h } = e.source ?? {};
-              if (w && h) setRatio(w / h);
-            }}
-          />
-        ) : null}
-        {isVideo && isCurrent && isActive && playbackUri ? (
-          <ViewerVideo uri={playbackUri} contentFit={cropped ? 'cover' : 'contain'} />
-        ) : null}
+        <PinchZoom onActiveChange={onZoomChange}>
+          {thumbnailUri ? (
+            <Image
+              source={{ uri: thumbnailUri }}
+              style={StyleSheet.absoluteFill}
+              // Tall photos are capped to a wider frame, so cover-crop them to fill
+              // it; everything else hugs its exact ratio, where contain fills with
+              // no crop.
+              contentFit={cropped ? 'cover' : 'contain'}
+              cachePolicy="memory-disk"
+              transition={0}
+              // No recyclingKey: the pager is a paging FlatList (mount/unmount,
+              // not view recycling), where recyclingKey only resets the image to
+              // blank before loading — a flash. It belongs on recycling lists.
+              onLoad={(e) => {
+                const { width: w, height: h } = e.source ?? {};
+                if (w && h) setRatio(w / h);
+              }}
+            />
+          ) : null}
+          {isVideo && isCurrent && isActive && playbackUri ? (
+            <ViewerVideo uri={playbackUri} contentFit={cropped ? 'cover' : 'contain'} />
+          ) : null}
+        </PinchZoom>
       </PhotoFrame>
 
       <View style={[styles.caption, { top: captionTop }]} pointerEvents="none">
