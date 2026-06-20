@@ -57,7 +57,10 @@ export function PinchZoom({
     .onUpdate((e) => {
       scale.value = Math.min(Math.max(e.scale, 1), maxScale);
     })
-    .onEnd(() => {
+    // onFinalize, not onEnd: it fires on end/fail/cancel alike (and even if the
+    // view unmounts mid-pinch), so the parent's zoom gate can never get wedged
+    // open — which would freeze the pager / dismiss / tab-swipe gestures.
+    .onFinalize(() => {
       settle();
       if (onActiveChange) scheduleOnRN(onActiveChange, false);
     });
@@ -71,7 +74,7 @@ export function PinchZoom({
       translateX.value = e.translationX;
       translateY.value = e.translationY;
     })
-    .onEnd(() => {
+    .onFinalize(() => {
       translateX.value = withTiming(0, RESET);
       translateY.value = withTiming(0, RESET);
     });
