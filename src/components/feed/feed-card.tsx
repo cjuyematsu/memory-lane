@@ -3,6 +3,7 @@ import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
+  withTiming,
 } from 'react-native-reanimated';
 
 import { Image } from 'expo-image';
@@ -89,6 +90,16 @@ export const FeedCard = memo(function FeedCard({
     if (visible) opacity.value = 1;
   }, [visible, opacity]);
 
+  // The caption (date + place) becomes ready independently of the photo — often
+  // a beat after it, once metadata resolves — so fade it in on its own opacity
+  // rather than letting it pop in over the already-visible photo.
+  const captionOpacity = useSharedValue(0);
+  const captionStyle = useAnimatedStyle(() => ({ opacity: captionOpacity.value }));
+
+  useEffect(() => {
+    if (overlayReady) captionOpacity.value = withTiming(1, { duration: 280 });
+  }, [overlayReady, captionOpacity]);
+
   // Announce readiness only as the current card (re-announcing when becoming
   // current, since a shuffle can land on an already-loaded card whose state
   // never flips again), and only on a real image result (load or error) — not
@@ -135,8 +146,12 @@ export const FeedCard = memo(function FeedCard({
       </PhotoFrame>
 
       {overlayReady ? (
-        <View
-          style={[styles.caption, { top: captionTop, left: FrameMargin, right: FrameMargin }]}
+        <Animated.View
+          style={[
+            styles.caption,
+            captionStyle,
+            { top: captionTop, left: FrameMargin, right: FrameMargin },
+          ]}
           pointerEvents="none">
           <Text
             style={styles.date}
@@ -146,7 +161,7 @@ export const FeedCard = memo(function FeedCard({
             {formatTimeAgo(meta.creationTime)}
           </Text>
           {placeName ? <Text style={styles.place}>{placeName}</Text> : null}
-        </View>
+        </Animated.View>
       ) : null}
     </Animated.View>
   );
