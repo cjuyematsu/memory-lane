@@ -81,6 +81,7 @@ On `expo-image`'s **`recyclingKey`**: changing it resets the image to blank/plac
 - Android MediaStore returns `creationTime` `0` for photos with no DATE_TAKEN — use `firstValidTime` (rejects `0`/null), never `??`, then fall back to modification time. This caused blank dates.
 - iOS photos may be iCloud-resident (`getIsInCloud`); rendering them needs a network download. Pass `asset.id` (a `ph://` URI) to `expo-image`/`expo-video`, never a resolved file path, or iCloud downloads fail silently.
 - Screenshots are rejected differently per platform (subtype check on iOS, "Screenshots" album on Android) in `use-asset-feed.ts`.
+- **Never cache a *failed* native read** (don't `.catch(() => null)` then `cappedSet`). A thrown read must propagate uncached so it can be retried; only cache a *successful* read (including a legit `null`, e.g. a no-GPS photo). Collapsing a throw into a cached `null` poisoned the cache and made the **first photo on a cold launch** (its read fires before the Photos framework is warm) lose its caption for the whole session. `hydrateAsset` resolves each read into an `{ok}` result and caches only when all succeeded; `useAssetMetadata` retries the best-effort meta with backoff until it recovers.
 
 ## Conventions
 
