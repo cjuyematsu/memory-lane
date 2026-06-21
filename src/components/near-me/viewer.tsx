@@ -24,6 +24,7 @@ import Animated, {
 import { scheduleOnRN } from 'react-native-worklets';
 
 import FilmIcon from '@/assets/icons/film.svg';
+import XIcon from '@/assets/icons/x.svg';
 import { PhotoFrame, frameTop } from '@/components/feed/photo-frame';
 import { PinchZoom } from '@/components/pinch-zoom';
 import { DisplayFont, FrameMargin, Ink, Paper, PhotoRatio } from '@/constants/theme';
@@ -255,14 +256,14 @@ export function Viewer({
                 )}
               </View>
               <Pressable style={styles.storyClose} onPress={handleClose} hitSlop={12}>
-                <Text style={styles.closeLabel}>✕</Text>
+                <XIcon width={28} height={28} color={Ink} />
               </Pressable>
             </SafeAreaView>
           ) : (
             <>
               <SafeAreaView style={styles.topBar} pointerEvents="box-none">
                 <Pressable style={styles.closeBtn} onPress={handleClose} hitSlop={12}>
-                  <Text style={styles.closeLabel}>✕</Text>
+                  <XIcon width={28} height={28} color={Ink} />
                 </Pressable>
               </SafeAreaView>
 
@@ -517,11 +518,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     alignSelf: 'flex-start',
-  },
-  closeLabel: {
-    color: Ink,
-    fontSize: 20,
-    fontWeight: '600',
   },
   bottomBar: {
     position: 'absolute',

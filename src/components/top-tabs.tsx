@@ -16,6 +16,7 @@ import Animated, {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { scheduleOnRN } from 'react-native-worklets';
 
+import ArrowLeftIcon from '@/assets/icons/arrow-left.svg';
 import { Feed } from '@/components/feed/feed';
 import { NearMe } from '@/components/near-me/near-me';
 import { DisplayFont, Ink, Paper } from '@/constants/theme';
@@ -181,7 +182,7 @@ export function TopTabs() {
               />
               <SafeAreaView style={styles.backWrap} pointerEvents="box-none">
                 <Pressable onPress={closeOverlay} style={styles.backBtn} hitSlop={12}>
-                  <Text style={styles.backLabel}>←</Text>
+                  <ArrowLeftIcon width={28} height={28} color={Ink} />
                 </Pressable>
               </SafeAreaView>
             </>
@@ -273,14 +274,9 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
   backBtn: {
-    marginTop: 0,
-    marginLeft: 10,
+    marginTop: 2,
+    marginLeft: 12,
     paddingHorizontal: 12,
-    paddingVertical: 1,
-  },
-  backLabel: {
-    color: Ink,
-    fontSize: 30,
-    fontWeight: '600',
+    paddingVertical: 8,
   },
 });
