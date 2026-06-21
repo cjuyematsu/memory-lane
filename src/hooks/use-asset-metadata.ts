@@ -105,7 +105,14 @@ export async function loadAssetLocation(asset: Asset): Promise<AssetLocation | n
 
   const p = (async () => {
     try {
-      const loc = await asset.getLocation().catch(() => null);
+      // Let a thrown native read propagate (and stay uncached) so it can be
+      // retried — do NOT `.catch(() => null)` here. Collapsing a failed read
+      // into a cached `null` is what made the first photo on a cold launch
+      // lose its caption forever: the framework isn't warm for that very first
+      // read, it throws, the `null` gets cached, and every retry then short-
+      // circuits to it. A *successfully* read `null` (a photo with no GPS) is
+      // still cached below so those aren't re-read.
+      const loc = await asset.getLocation();
       cappedSet(locationCache, asset.id, loc);
       return loc;
     } finally {
@@ -125,7 +132,9 @@ export async function loadAssetCreationTime(asset: Asset): Promise<number | null
 
   const p = (async () => {
     try {
-      const t = await asset.getCreationTime().catch(() => null);
+      // Same as loadAssetLocation: a thrown read must propagate uncached so it
+      // can be retried. A successfully read value (including 0/null) is cached.
+      const t = await asset.getCreationTime();
       cappedSet(timeCache, asset.id, t);
       return t;
     } finally {
@@ -153,24 +162,43 @@ export async function hydrateAsset(asset: Asset): Promise<AssetMetadata> {
   const p = (async () => {
     try {
       if (Platform.OS === 'ios') {
-        const [mediaType, ct, location] = await Promise.all([
-          asset.getMediaType(),
-          loadAssetCreationTime(asset),
-          locationCache.has(asset.id)
+        // Resolve each read into an {ok} result so a thrown native read — common
+        // for the very first read right after a cold launch, before the Photos
+        // framework is warm — is distinguished from a legitimately-absent value.
+        // getMediaType isn't caption-critical, so a failure there just falls back
+        // to UNKNOWN and never blocks the date/place.
+        const [mediaType, ctRes, locRes] = await Promise.all([
+          asset.getMediaType().catch(() => MediaType.UNKNOWN),
+          loadAssetCreationTime(asset).then(
+            (v): { ok: boolean; v: number | null } => ({ ok: true, v }),
+            (): { ok: boolean; v: number | null } => ({ ok: false, v: null })
+          ),
+          (locationCache.has(asset.id)
             ? Promise.resolve(locationCache.get(asset.id) ?? null)
-            : loadAssetLocation(asset),
+            : loadAssetLocation(asset)
+          ).then(
+            (v): { ok: boolean; v: AssetLocation | null } => ({ ok: true, v }),
+            (): { ok: boolean; v: AssetLocation | null } => ({ ok: false, v: null })
+          ),
         ]);
         // Fall back to modification time if the asset has no (valid) creation
         // time, so the date is always present.
         const creationTime =
-          firstValidTime(ct) ?? (await asset.getModificationTime().catch(() => null));
+          firstValidTime(ctRes.v) ?? (await asset.getModificationTime().catch(() => null));
         const meta: AssetMetadata = {
           uri: asset.id,
           creationTime,
-          location,
+          location: locRes.v,
           mediaType,
         };
-        cappedSet(fullCache, asset.id, meta);
+        // Cache only when both native reads actually succeeded. If either threw
+        // (cold-launch race), still return this best-effort meta so the card
+        // shows whatever we have, but leave it UNCACHED so useAssetMetadata
+        // re-attempts and the caption recovers once the framework is warm —
+        // instead of a failed read poisoning the cache for the whole session.
+        // A successful read of an absent value (a photo with no GPS) counts as
+        // ok and is cached, so those aren't re-read.
+        if (ctRes.ok && locRes.ok) cappedSet(fullCache, asset.id, meta);
         return meta;
       }
 
@@ -225,19 +253,27 @@ export function useAssetMetadata(asset: Asset | null): AssetMetadata | null {
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let attempt = 0;
-    const maxAttempts = 3;
+    // A few patient retries with backoff (~4s total at 400*attempt) so a read
+    // that throws because the Photos framework isn't warm yet on cold launch
+    // gets re-attempted once it is — rather than leaving the card captionless.
+    const maxAttempts = 5;
 
+    const scheduleRetry = () => {
+      attempt += 1;
+      if (attempt < maxAttempts) retryTimer = setTimeout(tryHydrate, 400 * attempt);
+    };
     const tryHydrate = () => {
       hydrateAsset(asset)
         .then((m) => {
-          if (!cancelled) setFetched({ id: asset.id, meta: m });
+          if (cancelled) return;
+          setFetched({ id: asset.id, meta: m });
+          // hydrateAsset only caches a fully-read result. If it returned a
+          // best-effort meta without caching (a cold-launch read that threw),
+          // re-attempt with backoff so the caption recovers once warm.
+          if (!fullCache.has(asset.id)) scheduleRetry();
         })
         .catch(() => {
-          if (cancelled) return;
-          attempt += 1;
-          if (attempt < maxAttempts) {
-            retryTimer = setTimeout(tryHydrate, 400 * attempt);
-          }
+          if (!cancelled) scheduleRetry();
         });
     };
     tryHydrate();
