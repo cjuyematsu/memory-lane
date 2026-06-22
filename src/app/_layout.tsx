@@ -14,6 +14,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import { MemoryBanner } from '@/components/notifications/memory-banner';
+import { NearbyMemoriesGreeter } from '@/components/notifications/nearby-memories-greeter';
 import { NotificationOrchestrator } from '@/components/notifications/notification-orchestrator';
 import { ShareHost } from '@/components/share/share-host';
 import { configureImageCache, installMemoryCacheReaper } from '@/lib/image-cache';
@@ -51,6 +52,7 @@ export default function RootLayout() {
       <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
         <AnimatedSplashOverlay />
         <NotificationOrchestrator />
+        <NearbyMemoriesGreeter />
         {ready ? <Slot /> : null}
         <MemoryBanner />
         <ShareHost />
