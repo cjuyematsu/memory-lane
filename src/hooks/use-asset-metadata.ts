@@ -249,7 +249,16 @@ export function useAssetMetadata(asset: Asset | null): AssetMetadata | null {
   );
 
   useEffect(() => {
-    if (!asset || fullCache.has(asset.id)) return;
+    if (!asset) return;
+    // NOTE: do NOT early-return when `fullCache.has(asset.id)`. If the feed warms
+    // this photo (warmAssetMetadata → hydrateAsset) into fullCache *between* this
+    // card's first render (which returned null on an empty cache) and this effect
+    // running, an early return here would skip setFetched — and nothing would
+    // re-render. The render reads fullCache non-reactively, and with React
+    // Compiler on, the memoized return (keyed on asset.id + fetched, both
+    // unchanged) stays the stale null, so the caption never appears. Always
+    // running tryHydrate guarantees setFetched fires (hydrateAsset returns the
+    // cached meta instantly when present), syncing `fetched` and surfacing it.
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let attempt = 0;
@@ -266,11 +275,13 @@ export function useAssetMetadata(asset: Asset | null): AssetMetadata | null {
       hydrateAsset(asset)
         .then((m) => {
           if (cancelled) return;
-          setFetched({ id: asset.id, meta: m });
-          // hydrateAsset only caches a fully-read result. If it returned a
-          // best-effort meta without caching (a cold-launch read that threw),
-          // re-attempt with backoff so the caption recovers once warm.
-          if (!fullCache.has(asset.id)) scheduleRetry();
+          // Surface only a COMPLETE result. hydrateAsset caches a meta only when
+          // both native reads succeeded, so `fullCache.has` is the "real data"
+          // signal. A best-effort meta from a cold read has creationTime null;
+          // surfacing it would fade the caption in blank and pop the date in
+          // later. Keep `meta` null (caption stays hidden) and retry until warm.
+          if (fullCache.has(asset.id)) setFetched({ id: asset.id, meta: m });
+          else scheduleRetry();
         })
         .catch(() => {
           if (!cancelled) scheduleRetry();
