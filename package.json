@@ -16,6 +16,7 @@
     "expo-media-library": "~56.0.6",
     "expo-notifications": "^56.0.14",
     "expo-router": "~56.2.6",
+    "expo-sharing": "~56.0.18",
     "expo-splash-screen": "~56.0.10",
     "expo-status-bar": "~56.0.4",
     "expo-symbols": "~56.0.5",
@@ -31,6 +32,7 @@
     "react-native-safe-area-context": "~5.7.0",
     "react-native-screens": "4.25.2",
     "react-native-svg": "15.15.4",
+    "react-native-view-shot": "5.1.0",
     "react-native-web": "~0.21.0",
     "react-native-worklets": "0.8.3"
   },

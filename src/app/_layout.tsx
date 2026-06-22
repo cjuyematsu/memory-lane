@@ -15,6 +15,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import { MemoryBanner } from '@/components/notifications/memory-banner';
 import { NotificationOrchestrator } from '@/components/notifications/notification-orchestrator';
+import { ShareHost } from '@/components/share/share-host';
 import { configureImageCache, installMemoryCacheReaper } from '@/lib/image-cache';
 import { runOnboardingPermissions } from '@/lib/onboarding-permissions';
 
@@ -52,6 +53,7 @@ export default function RootLayout() {
         <NotificationOrchestrator />
         {ready ? <Slot /> : null}
         <MemoryBanner />
+        <ShareHost />
       </ThemeProvider>
     </GestureHandlerRootView>
   );

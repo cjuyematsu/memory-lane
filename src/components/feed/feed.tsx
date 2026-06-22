@@ -21,8 +21,9 @@ import Animated, {
 import { scheduleOnRN } from 'react-native-worklets';
 
 import { Image } from 'expo-image';
-import { Asset } from 'expo-media-library';
+import { Asset, MediaType } from 'expo-media-library';
 
+import ShareIcon from '@/assets/icons/share.svg';
 import ShuffleIcon from '@/assets/icons/shuffle.svg';
 import { FeedCard } from '@/components/feed/feed-card';
 import { FeedCardEventsContext, type FeedCardEvents } from '@/components/feed/feed-context';
@@ -37,6 +38,7 @@ import {
 } from '@/hooks/use-asset-metadata';
 import { useMediaPermission } from '@/hooks/use-media-permission';
 import { prefetchReverseGeocode } from '@/hooks/use-reverse-geocode';
+import { requestShare } from '@/lib/share-memory';
 
 let rememberedAssetId: string | null = null;
 // Old-memory trickle: the on-device pick bias keeps shuffle instant but skews
@@ -527,6 +529,17 @@ export function Feed({
     listRef.current?.scrollToIndex({ index: newIdx, animated: false });
   }, [assets, currentId, fadeOpacity, rememberLastPosition]);
 
+  // Open the share chooser for the photo on screen. The mediaType is read from
+  // the warmed metadata cache (the visible card has already loaded its caption,
+  // so it's present); default to photo if somehow not yet cached.
+  const handleShare = useCallback(() => {
+    if (!currentId) return;
+    const asset = assets.find((a) => a.id === currentId);
+    if (!asset) return;
+    const cached = getCachedMetadata(currentId);
+    requestShare(asset, cached?.mediaType === MediaType.VIDEO);
+  }, [assets, currentId]);
+
   // Hard cap on the disabled window: if the destination card never reports
   // rendered (hung load, or the library reloaded mid-transition and the
   // scroll landed on a different card), re-enable shuffle anyway.
@@ -776,6 +789,16 @@ export function Feed({
         </View>
       ) : null}
 
+      {isReady && currentId ? (
+        <View
+          style={[styles.shareWrapper, { top: frame.top + frame.height + 80 }]}
+          pointerEvents="box-none">
+          <Pressable style={styles.shuffle} onPress={handleShare} hitSlop={12}>
+            <ShareIcon width={28} height={28} color={Ink} />
+          </Pressable>
+        </View>
+      ) : null}
+
       {isReady && showShuffle ? (
         <View
           style={[
@@ -844,6 +867,16 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
     justifyContent: 'center',
     paddingRight: 24,
+  },
+  // Mirror of the shuffle wrapper on the left, vertically aligned with it.
+  shareWrapper: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+    paddingLeft: 24,
   },
   shuffle: {
     padding: 8,

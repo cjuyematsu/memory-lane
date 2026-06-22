@@ -24,6 +24,7 @@ import Animated, {
 import { scheduleOnRN } from 'react-native-worklets';
 
 import FilmIcon from '@/assets/icons/film.svg';
+import ShareIcon from '@/assets/icons/share.svg';
 import XIcon from '@/assets/icons/x.svg';
 import { PhotoFrame, frameTop } from '@/components/feed/photo-frame';
 import { PinchZoom } from '@/components/pinch-zoom';
@@ -31,6 +32,7 @@ import { DisplayFont, FrameMargin, Ink, Paper, PhotoRatio } from '@/constants/th
 import { usePlaybackUri } from '@/hooks/use-asset-metadata';
 import { useReverseGeocode } from '@/hooks/use-reverse-geocode';
 import type { NearbyAsset } from '@/hooks/use-nearby-assets';
+import { requestShare } from '@/lib/share-memory';
 import { formatTimeAgo } from '@/utils/time-ago';
 
 const THUMB_SIZE = 56;
@@ -178,6 +180,11 @@ export function Viewer({
     if (index > 0) jumpTo(index - 1);
   };
 
+  const shareCurrent = () => {
+    const it = items[index];
+    if (it) requestShare(it.asset, it.mediaType === MediaType.VIDEO);
+  };
+
   return (
     <Animated.View style={[StyleSheet.absoluteFill, openStyle]}>
       <Animated.View style={[styles.backdrop, backdropStyle]} />
@@ -255,15 +262,23 @@ export function Viewer({
                   </View>
                 )}
               </View>
-              <Pressable style={styles.storyClose} onPress={handleClose} hitSlop={12}>
-                <XIcon width={28} height={28} color={Ink} />
-              </Pressable>
+              <View style={styles.storyControls}>
+                <Pressable style={styles.storyBtn} onPress={shareCurrent} hitSlop={12}>
+                  <ShareIcon width={28} height={28} color={Ink} />
+                </Pressable>
+                <Pressable style={styles.storyBtn} onPress={handleClose} hitSlop={12}>
+                  <XIcon width={28} height={28} color={Ink} />
+                </Pressable>
+              </View>
             </SafeAreaView>
           ) : (
             <>
               <SafeAreaView style={styles.topBar} pointerEvents="box-none">
                 <Pressable style={styles.closeBtn} onPress={handleClose} hitSlop={12}>
                   <XIcon width={28} height={28} color={Ink} />
+                </Pressable>
+                <Pressable style={styles.shareBtn} onPress={shareCurrent} hitSlop={12}>
+                  <ShareIcon width={28} height={28} color={Ink} />
                 </Pressable>
               </SafeAreaView>
 
@@ -500,24 +515,37 @@ const styles = StyleSheet.create({
     borderRadius: 2,
     backgroundColor: Ink,
   },
-  storyClose: {
-    alignSelf: 'flex-end',
+  storyControls: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     paddingHorizontal: 14,
-    paddingVertical: 8,
     marginTop: 2,
+  },
+  storyBtn: {
+    paddingHorizontal: 4,
+    paddingVertical: 8,
   },
   topBar: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
   },
   closeBtn: {
     marginTop: 2,
     marginLeft: 12,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    alignSelf: 'flex-start',
+  },
+  shareBtn: {
+    marginTop: 2,
+    marginRight: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
   },
   bottomBar: {
     position: 'absolute',
