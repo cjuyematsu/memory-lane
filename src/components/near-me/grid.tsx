@@ -72,14 +72,24 @@ export const Grid = memo(function Grid({
   // pinned at this position, so the scroll is a no-op there. Deferred a beat so
   // the RefreshControl's inset is applied before we scroll into it — otherwise
   // iOS clamps the negative offset straight back to the top.
+  // When it ends, settle back to the top: iOS's automatic inset retraction is
+  // racy and occasionally leaves the content stranded at the revealed negative
+  // offset (a white band above row 1), so force the scroll back to 0.
   useEffect(() => {
     const started = !!refreshing && !wasRefreshing.current;
+    const ended = !refreshing && wasRefreshing.current;
     wasRefreshing.current = !!refreshing;
-    if (!started) return;
-    const t = setTimeout(() => {
-      listRef.current?.scrollToOffset({ offset: -REFRESH_REVEAL_OFFSET, animated: true });
-    }, 50);
-    return () => clearTimeout(t);
+    if (started) {
+      const t = setTimeout(() => {
+        listRef.current?.scrollToOffset({ offset: -REFRESH_REVEAL_OFFSET, animated: true });
+      }, 50);
+      return () => clearTimeout(t);
+    }
+    if (ended) {
+      // Immediate (no defer): unlike the reveal, this isn't scrolling into an
+      // inset, so there's nothing to wait for.
+      listRef.current?.scrollToOffset({ offset: 0, animated: true });
+    }
   }, [refreshing]);
 
   const renderItem = useCallback<ListRenderItem<NearbyAsset>>(
