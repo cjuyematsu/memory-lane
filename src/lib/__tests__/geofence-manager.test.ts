@@ -186,7 +186,11 @@ describe('geofence enter handling', () => {
 
     await enter(ID_A);
 
-    expect(mockShowBanner).toHaveBeenCalledWith({ clusterId: ID_A, count: 2 });
+    expect(mockShowBanner).toHaveBeenCalledWith({
+      kind: 'cluster',
+      clusterId: ID_A,
+      count: 2,
+    });
     expect(mockScheduleNotification).not.toHaveBeenCalled();
   });
 
@@ -457,7 +461,11 @@ describe('foreground fallback', () => {
 
     mockWatchCb!({ coords: { latitude: LAT_A, longitude: -117.0 } });
     await flush();
-    expect(mockShowBanner).toHaveBeenCalledWith({ clusterId: ID_A, count: 1 });
+    expect(mockShowBanner).toHaveBeenCalledWith({
+      kind: 'cluster',
+      clusterId: ID_A,
+      count: 1,
+    });
 
     // Drifting within the same place stays quiet — the cooldown holds.
     mockWatchCb!({ coords: { latitude: LAT_A + 0.0002, longitude: -117.0 } });

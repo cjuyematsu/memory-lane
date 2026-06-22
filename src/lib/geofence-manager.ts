@@ -100,7 +100,7 @@ async function handleClusterEnter(clusterId: string): Promise<void> {
 
   if (AppState.currentState === 'active') {
     // Foreground: show the in-app banner instead of a system notification.
-    showBanner({ clusterId, count: cluster.assetIds.length });
+    showBanner({ kind: 'cluster', clusterId, count: cluster.assetIds.length });
   } else {
     await ensureAndroidChannel();
     await Notifications.scheduleNotificationAsync({

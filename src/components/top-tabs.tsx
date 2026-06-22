@@ -20,6 +20,7 @@ import ArrowLeftIcon from '@/assets/icons/arrow-left.svg';
 import { Feed } from '@/components/feed/feed';
 import { NearMe } from '@/components/near-me/near-me';
 import { DisplayFont, Ink, Paper } from '@/constants/theme';
+import { subscribeNearMeRequest } from '@/lib/near-me-request';
 import {
   getPendingCluster,
   subscribePendingCluster,
@@ -63,6 +64,10 @@ export function TopTabs() {
       }),
     []
   );
+
+  // The app-open "N memories near you" banner switches to Near Me without
+  // opening a cluster view (so the user lands on the grid, not a single place).
+  useEffect(() => subscribeNearMeRequest(() => setTab('nearMe')), []);
 
   // Animate the pager when `tab` changes (whether by gesture or tap).
   useEffect(() => {
