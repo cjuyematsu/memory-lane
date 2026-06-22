@@ -10,8 +10,16 @@ function keyFor({ latitude, longitude }: Coords) {
   return `${latitude.toFixed(3)},${longitude.toFixed(3)}`;
 }
 
-function pickPlaceName(addr: Location.LocationGeocodedAddress): string | null {
-  if (addr.name && /\p{L}/u.test(addr.name)) return addr.name;
+// A placemark/POI name ("Pike Place Market") makes a great caption, but a bare
+// residential street address ("16923 NE 122nd St") is too precise — it can be
+// someone's home and discourages sharing the caption — so for those we fall back
+// to the city. A street address is detected by a leading house number (the
+// geocoder's `name` starts with the streetNumber, or with bare digits).
+export function pickPlaceName(addr: Location.LocationGeocodedAddress): string | null {
+  const name = addr.name?.trim() ?? '';
+  const startsWithHouseNumber =
+    (!!addr.streetNumber && name.startsWith(addr.streetNumber)) || /^\d+\s/.test(name);
+  if (name && /\p{L}/u.test(name) && !startsWithHouseNumber) return name;
   if (addr.city) return addr.city;
   if (addr.subregion) return addr.subregion;
   if (addr.region) return addr.region;
