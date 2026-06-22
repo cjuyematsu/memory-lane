@@ -82,13 +82,20 @@ export function SettingsSheet({
   const degraded =
     settings.enabled &&
     perm != null &&
-    (perm.backgroundLocation !== 'granted' || perm.notifications !== 'granted');
+    (perm.foregroundLocation !== 'granted' ||
+      perm.backgroundLocation !== 'granted' ||
+      perm.notifications !== 'granted');
   const degradedReason =
-    perm?.notifications !== 'granted'
-      ? 'Notifications are off, so memories can’t reach you.'
-      : // True degradation: the foreground position-watch fallback covers the
-        // app-open case; background geofencing needs "Always".
-        'Background location isn’t set to “Always,” so memories only appear while the app is open.';
+    // Foreground location off (app set to "Never", or Location Services disabled
+    // globally — both read as not-granted) means even the foreground
+    // position-watch fallback can't run, so NOTHING surfaces. Check this first.
+    perm?.foregroundLocation !== 'granted'
+      ? "Location is off, turn on access to see memories near you."
+      : perm?.notifications !== 'granted'
+        ? "Notifications are off, so memories can't reach you."
+        : // True degradation: the foreground position-watch fallback covers the
+          // app-open case; background geofencing needs "Always".
+          `Background location isn't set to "Always," you will not receive notifications.`;
 
   return (
     <Modal
@@ -102,24 +109,28 @@ export function SettingsSheet({
         <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
           <Text style={styles.title}>Settings</Text>
 
-          <View style={styles.row}>
-            <View style={styles.rowText}>
-              <Text style={styles.rowLabel}>Memory notifications</Text>
-              <Text style={styles.rowSub}>
-                Get notified when you&apos;re near a place where you took photos in the past. (Needs location and notification permissions)
-              </Text>
+          <View style={styles.notifBlock}>
+            <View style={styles.row}>
+              <View style={styles.rowText}>
+                <Text style={styles.rowLabel}>Memory notifications</Text>
+              </View>
+              {requesting ? (
+                <ActivityIndicator color={Ink} />
+              ) : (
+                <Switch
+                  value={settings.enabled}
+                  onValueChange={handleToggle}
+                  trackColor={{ true: Ink, false: '#D1D1D6' }}
+                  thumbColor={Paper}
+                  ios_backgroundColor="#D1D1D6"
+                />
+              )}
             </View>
-            {requesting ? (
-              <ActivityIndicator color={Ink} />
-            ) : (
-              <Switch
-                value={settings.enabled}
-                onValueChange={handleToggle}
-                trackColor={{ true: Ink, false: '#D1D1D6' }}
-                thumbColor={Paper}
-                ios_backgroundColor="#D1D1D6"
-              />
-            )}
+            {/* Full-width below the toggle row, not boxed into the left column. */}
+            <Text style={styles.rowSub}>
+              Get notified when you&apos;re near a place where you took photos in the past. (Needs
+              location and notification permissions)
+            </Text>
           </View>
 
           {degraded ? (
@@ -147,7 +158,7 @@ export function SettingsSheet({
                     ok ? 'Test scheduled' : 'Notifications off',
                     ok
                       ? 'Background the app now — a test notification will appear in ~8 seconds.'
-                      : 'Turn on “Memory notifications” (or allow them in system Settings) first.'
+                      : 'Turn on "Memory notifications" (or allow them in system Settings) first.'
                   );
                 }}>
                 <Text style={styles.devButtonLabel}>Send test notification</Text>
@@ -188,6 +199,9 @@ const styles = StyleSheet.create({
     color: Ink,
     fontSize: 22,
     textTransform: 'uppercase',
+  },
+  notifBlock: {
+    gap: 4,
   },
   row: {
     flexDirection: 'row',
