@@ -130,7 +130,6 @@ export function ShareHost() {
         {phase === 'choosing' ? (
           <Pressable style={styles.backdrop} onPress={closeShare}>
             <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
-              <Text style={styles.title}>Share</Text>
               {options.map((opt) => (
                 <Pressable
                   key={opt.mode}
