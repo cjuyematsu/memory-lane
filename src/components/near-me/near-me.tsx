@@ -27,6 +27,11 @@ const EMPTY: NearbyAsset[] = [];
 // How long after a refresh trigger we keep adopting freshly-computed results
 // before freezing again — covers the GPS fix + 300ms feed debounce + index sync.
 const SETTLE_MS = 600;
+// Minimum time a refresh reads as "busy" after a tap — drives the empty-state
+// "Searching…" view. The recompute can settle near-instantly (nothing nearby /
+// same library), so without a floor the tap would read as a no-op; this
+// guarantees the search feels like it actually ran.
+const BUSY_MIN_MS = 1200;
 
 export function NearMe({
   isActive = true,
@@ -80,10 +85,33 @@ export function NearMe({
   // freshly-settled `items` into the snapshot; outside it the grid is frozen.
   const [accepting, setAccepting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  // True while a user-triggered refresh is visibly in progress. Drives the
+  // empty-state "Searching…" view — the feedback the RefreshControl spinner
+  // can't give when there's no grid to pull (and the always-present side pill
+  // routes here too, so tapping it in the empty state shows that screen).
+  // Latched for at least BUSY_MIN_MS so a refresh always reads as work.
+  const [busy, setBusy] = useState(false);
   // Token guards the settle timer so overlapping refreshes extend the window and a
   // stale timer only closes the window it opened.
   const acceptSeq = useRef(0);
   const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const busyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Remembers whether the last *resolved* location check found location
+  // unavailable. A refresh flips location through 'requesting' (which has no
+  // identity of its own), so this lets us tell "refreshing a known-off location"
+  // (show "Searching for location…", not the stale grid) from a normal refresh
+  // (keep the photos). Sticky across 'requesting'/'idle'; only 'ready' clears it.
+  // Adjusted during render (guarded, self-terminating) — same supported pattern
+  // as the displayItems snapshot below, so no effect / no ref-in-render.
+  const [locationWasUnavailable, setLocationWasUnavailable] = useState(false);
+  if (
+    (locationState.status === 'denied' || locationState.status === 'error') &&
+    !locationWasUnavailable
+  ) {
+    setLocationWasUnavailable(true);
+  } else if (locationState.status === 'ready' && locationWasUnavailable) {
+    setLocationWasUnavailable(false);
+  }
 
   const arm = useCallback(() => {
     const token = (acceptSeq.current += 1);
@@ -117,18 +145,25 @@ export function NearMe({
     return () => sub.remove();
   }, [arm, refreshLocation]);
 
-  // Clear any pending settle timer on unmount.
+  // Clear any pending timers on unmount.
   useEffect(() => {
     return () => {
       if (settleTimer.current) clearTimeout(settleTimer.current);
+      if (busyTimer.current) clearTimeout(busyTimer.current);
     };
   }, []);
 
   // Explicit user refresh (pull-to-refresh, the refresh pill, and the empty-state
   // button all route here): refetch location + library, rebuild the index, and
-  // adopt the fresh result while the settle window is open.
+  // adopt the fresh result while the settle window is open. Also latches `busy`
+  // for a minimum beat so an empty-state refresh (pill or middle button) shows
+  // the "Searching…" screen even when work settles instantly — otherwise the
+  // tap reads as a no-op.
   const onUserRefresh = useCallback(() => {
     setRefreshing(true);
+    setBusy(true);
+    if (busyTimer.current) clearTimeout(busyTimer.current);
+    busyTimer.current = setTimeout(() => setBusy(false), BUSY_MIN_MS);
     arm();
     refreshLocation();
     refreshNearby();
@@ -211,6 +246,26 @@ export function NearMe({
   // The normal Near Me body. Rendered underneath the memories cluster view so
   // that swiping the cluster view away reveals this instead of a black screen.
   const body = (() => {
+    // While an explicit refresh re-checks a location we know is unavailable —
+    // either it's resolved to denied/error, or it's mid-'requesting' after a
+    // previous failure — show a searching state instead of the location prompt
+    // or a stale grid. Mirrors the empty-state "Searching for photos…"; the
+    // prompt returns once the check settles. Normal refreshes (location ready)
+    // never hit this, so their photos stay on screen.
+    const locationUnavailable =
+      locationState.status === 'denied' ||
+      locationState.status === 'error' ||
+      ((locationState.status === 'requesting' || locationState.status === 'idle') &&
+        locationWasUnavailable);
+    if (busy && locationUnavailable) {
+      return (
+        <SafeAreaView style={styles.center}>
+          <ActivityIndicator color={Ink} />
+          <Text style={styles.emptyTitle}>Searching…</Text>
+          <Text style={styles.emptySub}>Looking for your location.</Text>
+        </SafeAreaView>
+      );
+    }
     if (locationState.status === 'denied') {
       return (
         <SafeAreaView style={styles.center}>
@@ -283,11 +338,21 @@ export function NearMe({
       />
     ) : displayItems !== null ? (
       <SafeAreaView style={styles.empty}>
-        <Text style={styles.emptyTitle}>Nothing here yet</Text>
-        <Text style={styles.emptySub}>No photos or videos nearby.</Text>
-        <Pressable onPress={onUserRefresh} style={styles.button}>
-          <Text style={styles.buttonLabel}>Refresh</Text>
-        </Pressable>
+        {busy ? (
+          <>
+            <ActivityIndicator color={Ink} />
+            <Text style={styles.emptyTitle}>Searching…</Text>
+            <Text style={styles.emptySub}>Looking for photos &amp; videos nearby.</Text>
+          </>
+        ) : (
+          <>
+            <Text style={styles.emptyTitle}>Nothing here yet</Text>
+            <Text style={styles.emptySub}>No photos or videos nearby.</Text>
+            <Pressable onPress={onUserRefresh} style={styles.button}>
+              <Text style={styles.buttonLabel}>Refresh</Text>
+            </Pressable>
+          </>
+        )}
       </SafeAreaView>
     ) : (
       <View style={styles.center}>

@@ -1,7 +1,7 @@
-import { memo, useCallback } from 'react';
+import { memo, useCallback, useEffect, useRef } from 'react';
 import { Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 
-import { FlashList, type ListRenderItem } from '@shopify/flash-list';
+import { FlashList, type FlashListRef, type ListRenderItem } from '@shopify/flash-list';
 import { Image } from 'expo-image';
 import { MediaType } from 'expo-media-library';
 
@@ -10,6 +10,11 @@ import type { NearbyAsset } from '@/hooks/use-nearby-assets';
 
 const COLUMNS = 3;
 const GAP = 2; // hairline gutter between tiles, like the Photos grid
+// How far above the content top to scroll when a refresh begins, so the
+// RefreshControl spinner (which lives at a negative offset, just out of view at
+// the top) becomes fully visible. iOS clamps this to the refresh control's inset;
+// Android clamps to 0 and shows its own drop-down overlay spinner.
+const REFRESH_REVEAL_OFFSET = 90;
 
 // One clean, continuous 3-column grid of everything nearby on the light gallery
 // canvas, newest first — no dates, headers, or floating labels, just the
@@ -58,6 +63,25 @@ export const Grid = memo(function Grid({
   onRefresh?: () => void;
   refreshing?: boolean;
 }) {
+  const listRef = useRef<FlashListRef<NearbyAsset>>(null);
+  const wasRefreshing = useRef(false);
+
+  // When a refresh begins, reveal the spinner: scroll above the content top so
+  // it's visible even if the user was scrolled to the bottom (the side refresh
+  // pill triggers `refreshing` without any scroll). A pull-to-refresh is already
+  // pinned at this position, so the scroll is a no-op there. Deferred a beat so
+  // the RefreshControl's inset is applied before we scroll into it — otherwise
+  // iOS clamps the negative offset straight back to the top.
+  useEffect(() => {
+    const started = !!refreshing && !wasRefreshing.current;
+    wasRefreshing.current = !!refreshing;
+    if (!started) return;
+    const t = setTimeout(() => {
+      listRef.current?.scrollToOffset({ offset: -REFRESH_REVEAL_OFFSET, animated: true });
+    }, 50);
+    return () => clearTimeout(t);
+  }, [refreshing]);
+
   const renderItem = useCallback<ListRenderItem<NearbyAsset>>(
     ({ item, index }) => <GridCell item={item} index={index} onPress={onPressItem} />,
     [onPressItem]
@@ -66,6 +90,7 @@ export const Grid = memo(function Grid({
   return (
     <View style={[styles.panel, { marginTop: paddingTop }]}>
       <FlashList
+        ref={listRef}
         data={items}
         numColumns={COLUMNS}
         keyExtractor={keyExtractor}
