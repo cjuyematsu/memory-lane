@@ -436,6 +436,9 @@ function ViewerVideo({ uri, contentFit }: { uri: string; contentFit: 'cover' | '
   const player = useVideoPlayer(uri, (p) => {
     p.loop = true;
     p.muted = true;
+    // Mix with other apps' audio so a (muted) video never interrupts the
+    // user's background music. The default 'auto' still interrupts here.
+    p.audioMixingMode = 'mixWithOthers';
     p.play();
   });
 
@@ -461,6 +464,7 @@ function ViewerVideo({ uri, contentFit }: { uri: string; contentFit: 'cover' | '
           .then(() => {
             player.muted = true;
             player.loop = true;
+            player.audioMixingMode = 'mixWithOthers';
             player.play();
           })
           .catch(() => {});
