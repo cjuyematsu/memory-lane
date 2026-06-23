@@ -1,5 +1,6 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import {
+  AppState,
   FlatList,
   Pressable,
   ScrollView,
@@ -437,6 +438,36 @@ function ViewerVideo({ uri, contentFit }: { uri: string; contentFit: 'cover' | '
     p.muted = true;
     p.play();
   });
+
+  // Backgrounding the app leaves the player's AVPlayerItem stalled, so on return
+  // the video sits frozen on the last frame (play() resumes audio only). On a
+  // real background→foreground we reload the source — replaceAsync, the required
+  // path for the ph:// PHAsset URIs we pass — which rebuilds a live item and
+  // render surface in place, then play. We deliberately do NOT remount the
+  // VideoView: an earlier key-bump did, but tearing the view down and back up
+  // read as a jerky flash; reloading the item on the still-mounted view is
+  // smoother. Restarts the clip from the top (fine here: muted + looping). The
+  // explicit "was backgrounded" flag keeps benign inactive→active blips (Control
+  // Center, a notification) from reloading.
+  const wasBackgrounded = useRef(false);
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s === 'background') {
+        wasBackgrounded.current = true;
+      } else if (s === 'active' && wasBackgrounded.current) {
+        wasBackgrounded.current = false;
+        player
+          .replaceAsync(uri)
+          .then(() => {
+            player.muted = true;
+            player.loop = true;
+            player.play();
+          })
+          .catch(() => {});
+      }
+    });
+    return () => sub.remove();
+  }, [player, uri]);
 
   return (
     <VideoView
