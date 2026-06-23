@@ -7,6 +7,7 @@ import { MediaType } from 'expo-media-library';
 
 import { Ink, Paper } from '@/constants/theme';
 import type { NearbyAsset } from '@/hooks/use-nearby-assets';
+import { setAssetRatio } from '@/lib/asset-ratio-cache';
 
 const COLUMNS = 3;
 const GAP = 2; // hairline gutter between tiles, like the Photos grid
@@ -149,9 +150,20 @@ const GridCell = memo(function GridCell({
           contentFit="cover"
           cachePolicy="memory-disk"
           transition={180}
+          // Record the poster's intrinsic ratio (reported regardless of
+          // contentFit) so the viewer can open this asset at its true shape with
+          // no resize snap. Free — the tile decodes the poster anyway.
+          onLoad={(e) => {
+            const { width: w, height: h } = e.source ?? {};
+            if (w && h) setAssetRatio(item.asset.id, w / h);
+          }}
         />
         {isVideo ? (
-          <View style={styles.videoCenterBadge} pointerEvents="none">
+          // Subtle corner cue: a small white play triangle with a soft dark
+          // underlay (legible over bright photos) instead of a big centered
+          // circle. Mirrors the tiny play glyph on the viewer filmstrip thumbs.
+          <View style={styles.videoBadge} pointerEvents="none">
+            <View style={styles.playTriangleShadow} />
             <View style={styles.playTriangle} />
           </View>
         ) : null}
@@ -181,23 +193,40 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  videoCenterBadge: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    alignItems: 'center',
-    justifyContent: 'center',
+  // Bottom-left corner, inset off the tile edge.
+  videoBadge: {
+    position: 'absolute',
+    left: 6,
+    bottom: 6,
+    width: 12,
+    height: 16,
   },
+  // White right-pointing triangle, sitting over a slightly larger dark triangle
+  // that reads as a ~1px outline/shadow so the cue stays visible on any photo.
   playTriangle: {
+    position: 'absolute',
+    left: 1,
+    top: 2,
     width: 0,
     height: 0,
-    borderLeftWidth: 14,
-    borderTopWidth: 9,
-    borderBottomWidth: 9,
+    borderLeftWidth: 10,
+    borderTopWidth: 6,
+    borderBottomWidth: 6,
     borderLeftColor: '#fff',
     borderTopColor: 'transparent',
     borderBottomColor: 'transparent',
-    marginLeft: 3,
+  },
+  playTriangleShadow: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    width: 0,
+    height: 0,
+    borderLeftWidth: 12,
+    borderTopWidth: 8,
+    borderBottomWidth: 8,
+    borderLeftColor: 'rgba(0,0,0,0.75)',
+    borderTopColor: 'transparent',
+    borderBottomColor: 'transparent',
   },
 });

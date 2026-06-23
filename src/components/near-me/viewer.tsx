@@ -32,6 +32,7 @@ import { DisplayFont, FrameMargin, Ink, Paper, PhotoRatio } from '@/constants/th
 import { usePlaybackUri } from '@/hooks/use-asset-metadata';
 import { useReverseGeocode } from '@/hooks/use-reverse-geocode';
 import type { NearbyAsset } from '@/hooks/use-nearby-assets';
+import { getAssetRatio, setAssetRatio } from '@/lib/asset-ratio-cache';
 import { requestShare } from '@/lib/share-memory';
 import { formatTimeAgo } from '@/utils/time-ago';
 
@@ -343,7 +344,11 @@ const ViewerPage = memo(function ViewerPage({
   // content:// (Android) / ph:// (iOS) via asset.id — scoped-storage safe,
   // unlike the file:// path that rendered blank on Android.
   const thumbnailUri = item.asset.id;
-  const [ratio, setRatio] = useState<number | null>(null);
+  // Seed from the shared ratio cache (populated by the grid as tiles decode) so
+  // the frame opens at the asset's true shape — no 3:4 default then resize snap.
+  const [ratio, setRatio] = useState<number | null>(
+    () => getAssetRatio(item.asset.id) ?? null
+  );
 
   // The black frame hugs each photo's own aspect ratio (the largest box of that
   // shape that fits the available area), instead of forcing a fixed 3:4 box —
@@ -394,7 +399,10 @@ const ViewerPage = memo(function ViewerPage({
               // blank before loading — a flash. It belongs on recycling lists.
               onLoad={(e) => {
                 const { width: w, height: h } = e.source ?? {};
-                if (w && h) setRatio(w / h);
+                if (w && h) {
+                  setRatio(w / h);
+                  setAssetRatio(item.asset.id, w / h);
+                }
               }}
             />
           ) : null}
