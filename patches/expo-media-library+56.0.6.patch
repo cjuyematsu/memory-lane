@@ -118,3 +118,31 @@ index f2b90c1..6c9ec99 100644
  
    override suspend fun getExif(): Bundle = withContext(Dispatchers.IO) {
      if (getMediaType() != MediaType.IMAGE) {
+diff --git a/node_modules/expo-media-library/ios/next/objects/asset/UriExtractor.swift b/node_modules/expo-media-library/ios/next/objects/asset/UriExtractor.swift
+index 9ac2b7e..0312b2b 100644
+--- a/node_modules/expo-media-library/ios/next/objects/asset/UriExtractor.swift
++++ b/node_modules/expo-media-library/ios/next/objects/asset/UriExtractor.swift
+@@ -14,7 +14,12 @@ class UriExtractor {
+   }
+ 
+   private static func extract(fromImage phAsset: PHAsset) async throws -> URL {
+-    let result = try await phAsset.requestContentEditingInput()
++    // Allow fetching the original from iCloud: with "Optimize iPhone Storage"
++    // the full-size original is offloaded and `fullSizeImageURL` is nil unless
++    // network access is permitted. (Default options leave this false.)
++    let options = PHContentEditingInputRequestOptions()
++    options.isNetworkAccessAllowed = true
++    let result = try await phAsset.requestContentEditingInput(options: options)
+     guard let contentEditingInput = result.input else {
+       throw FailedToExtractUri("Missing content editing input for image")
+     }
+@@ -27,6 +32,9 @@ class UriExtractor {
+   private static func extract(fromVideo phAsset: PHAsset) async throws -> URL {
+     let options = PHVideoRequestOptions()
+     options.version = .original
++    // Same iCloud-offload reason as the image path: allow downloading the
++    // original from iCloud so an offloaded video can be resolved to a URL.
++    options.isNetworkAccessAllowed = true
+     let result = try await PHImageManager.default()
+       .requestAVAsset(forVideo: phAsset, options: options)
+     guard let avAsset = result.asset else {

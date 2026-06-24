@@ -17,9 +17,12 @@ import { DisplayFont, Ink, Paper } from '@/constants/theme';
 import {
   closeShare,
   prepareRawShare,
+  RAW_SHARE_TIMEOUT_MS,
   shareFile,
   shareOptionsFor,
+  ShareTimeoutError,
   useShareTarget,
+  withTimeout,
   type ShareMode,
   type ShareTarget,
 } from '@/lib/share-memory';
@@ -49,13 +52,24 @@ export function ShareHost() {
   }, []);
 
   const shareRaw = useCallback(
-    async (asset: Asset) => {
+    async (asset: Asset, isVideo: boolean) => {
       try {
-        const { uri, mimeType } = await prepareRawShare(asset);
+        // Resolving the original can require an iCloud download (offloaded by
+        // "Optimize iPhone Storage"), so bound it — otherwise the "Preparing…"
+        // spinner could hang forever. Only the prepare step is timed; the
+        // user-driven share sheet (shareFile) is not.
+        const { uri, mimeType } = await withTimeout(
+          prepareRawShare(asset, isVideo),
+          RAW_SHARE_TIMEOUT_MS
+        );
         await shareFile(uri, mimeType);
         closeShare();
-      } catch {
-        fail('This item could not be prepared for sharing.');
+      } catch (e) {
+        fail(
+          e instanceof ShareTimeoutError
+            ? 'Couldn’t download this from iCloud. Check your connection and try again.'
+            : 'This item could not be prepared for sharing.'
+        );
       }
     },
     [fail]
@@ -67,7 +81,7 @@ export function ShareHost() {
       captured.current = false;
       setPhase('working');
       if (mode === 'raw') {
-        void shareRaw(target.asset);
+        void shareRaw(target.asset, target.isVideo);
       } else {
         // Mount the off-screen ShareCard; capture fires from its onReady.
         setFramedAsset(target.asset);
