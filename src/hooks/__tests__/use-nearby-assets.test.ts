@@ -180,8 +180,26 @@ describe('computeNearby radius', () => {
 
   const assetsOf = (ids: string[]) => ids.map((id) => ({ id }) as Asset);
 
-  it('is 150m', () => {
+  it('defaults to the 150m fallback radius', () => {
     expect(NEAR_ME_RADIUS_METERS).toBe(150);
+  });
+
+  it('honors a wider explicit radius (sparse area)', () => {
+    const index = indexOf([located('mid', M445, 'photo')]);
+    // ~445m: outside the 150m default, inside an adaptively-widened 500m.
+    expect(computeNearby(index, assetsOf(['mid']), origin).photos).toEqual([]);
+    expect(
+      computeNearby(index, assetsOf(['mid']), origin, 500).photos.map((p) => p.asset.id)
+    ).toEqual(['mid']);
+  });
+
+  it('honors a tighter explicit radius (dense area)', () => {
+    const index = indexOf([located('near', M111, 'photo')]);
+    // ~111m: inside the default, dropped once the radius tightens to 80m.
+    expect(
+      computeNearby(index, assetsOf(['near']), origin).photos.map((p) => p.asset.id)
+    ).toEqual(['near']);
+    expect(computeNearby(index, assetsOf(['near']), origin, 80).photos).toEqual([]);
   });
 
   it('keeps photos within the radius and drops the rest', () => {

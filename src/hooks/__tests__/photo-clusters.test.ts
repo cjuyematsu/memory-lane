@@ -116,7 +116,9 @@ describe('isAreaNotifiable', () => {
     expect(isAreaNotifiable(oldHome, [oldHome, recentNeighbor], NOW)).toBe(false);
   });
 
-  it('does not suppress when recent media is beyond 150m', () => {
+  it('does not suppress when recent media is beyond 150m (dense area)', () => {
+    // Only two clusters ~300m apart, so the neighborhood stays at the 150m
+    // floor and the recent photo is out of range — still notifiable.
     const oldSpot = cluster({ id: 'old', centerLat: 34.0 });
     const farRecent = cluster({
       id: 'recent',
@@ -124,6 +126,21 @@ describe('isAreaNotifiable', () => {
       newestCreationTime: RECENT,
     });
     expect(isAreaNotifiable(oldSpot, [oldSpot, farRecent], NOW)).toBe(true);
+  });
+
+  it('widens the suppression neighborhood in a sparse area', () => {
+    // The nearest OTHER places are ~800m+ away (genuinely spread out), so the
+    // neighborhood widens to the ceiling and a recent photo ~250m away now
+    // suppresses the old spot — it would not under a fixed 150m radius.
+    const oldSpot = cluster({ id: 'old', centerLat: 34.0 });
+    const recent = cluster({
+      id: 'recent',
+      centerLat: 34.0 + 2.5 * DEG_100M, // ~250m
+      newestCreationTime: RECENT,
+    });
+    const far1 = cluster({ id: 'far1', centerLat: 34.0 + 8 * DEG_100M }); // ~800m, old
+    const far2 = cluster({ id: 'far2', centerLat: 34.0 + 9 * DEG_100M }); // ~900m, old
+    expect(isAreaNotifiable(oldSpot, [oldSpot, recent, far1, far2], NOW)).toBe(false);
   });
 });
 

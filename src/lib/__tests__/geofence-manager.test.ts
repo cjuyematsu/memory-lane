@@ -173,9 +173,9 @@ describe('geofence enter handling', () => {
     expect(call[0].content.data.clusterId).toBe(ID_A);
     expect(call[0].trigger).toEqual({ channelId: 'memories' });
     expect(mockShowBanner).not.toHaveBeenCalled();
-    // Cooldown + engagement were recorded.
+    // Cooldown + presence were recorded.
     expect(mockStore.has('notification-cooldown.json')).toBe(true);
-    expect(mockStore.has('notification-engagement.json')).toBe(true);
+    expect(mockStore.has('place-presence.json')).toBe(true);
   });
 
   it('shows the in-app banner instead when the app is active', async () => {
@@ -219,20 +219,25 @@ describe('geofence enter handling', () => {
     expect(mockShowBanner).not.toHaveBeenCalled();
   });
 
-  it('respects an engagement suppression window', async () => {
+  it('goes silent at a routine place (home/work) after enough distinct days', async () => {
     enableNotifications();
     setIndex([locatedAsset('a', LAT_A, OLD)]);
-    mockStore.set(
-      'notification-engagement.json',
-      JSON.stringify({
-        [ID_A]: { surfaced: 0, suppressedUntil: Date.now() + DAY },
-      })
-    );
     const { enter } = loadManager();
+    const base = Date.now();
+    const nowSpy = jest.spyOn(Date, 'now');
 
+    // Visit the same spot on three distinct days. The 6h cooldown doesn't apply
+    // (days apart), so the only thing that can silence it is routine detection.
+    nowSpy.mockReturnValue(base);
+    await enter(ID_A);
+    nowSpy.mockReturnValue(base + DAY);
+    await enter(ID_A);
+    nowSpy.mockReturnValue(base + 2 * DAY); // third distinct day → routine
     await enter(ID_A);
 
-    expect(mockScheduleNotification).not.toHaveBeenCalled();
+    // Notified on the first two days, then recognized as home/work and muted.
+    expect(mockScheduleNotification).toHaveBeenCalledTimes(2);
+    nowSpy.mockRestore();
   });
 
   it('notifies a nearby cluster only once: cooldown covers the 150m radius', async () => {
@@ -274,8 +279,10 @@ describe('geofence enter handling', () => {
 });
 
 describe('geofence registration', () => {
-  it('registers 120m enter-only regions for notifiable clusters', async () => {
+  it('registers enter-only regions; dense clusters clamp to the 120m floor', async () => {
     enableNotifications();
+    // A and B sit ~55m apart — a dense pair, so the adaptive radius clamps to
+    // the 120m geofence floor (unchanged from the old fixed behavior).
     setIndex([locatedAsset('a', LAT_A, OLD), locatedAsset('b', LAT_B, OLD)]);
     const { mgr } = loadManager();
 
@@ -297,6 +304,26 @@ describe('geofence registration', () => {
       expect(r.radius).toBe(120);
       expect(r.notifyOnEnter).toBe(true);
       expect(r.notifyOnExit).toBe(false);
+    }
+  });
+
+  it('widens enter regions in a sparse area to the ceiling', async () => {
+    enableNotifications();
+    // Two old clusters ~1km apart: a spread-out area, so each region widens to
+    // the 400m ceiling rather than the dense 120m floor — a far-flung memory
+    // still triggers.
+    setIndex([locatedAsset('a', 34.0, OLD), locatedAsset('far', 34.009, OLD)]);
+    const { mgr } = loadManager();
+
+    await mgr.startOrRefreshGeofences(34.0, -117.0, []);
+
+    const [, regions] = mockStartGeofencing.mock.calls[0] as unknown as [
+      string,
+      { identifier: string; radius: number }[],
+    ];
+    expect(regions).toHaveLength(2);
+    for (const r of regions) {
+      expect(r.radius).toBe(400);
     }
   });
 
@@ -473,14 +500,15 @@ describe('foreground fallback', () => {
     expect(mockShowBanner).toHaveBeenCalledTimes(1);
   });
 
-  it('stays quiet when no notifiable cluster is within 120m', async () => {
+  it('stays quiet when no notifiable cluster is within the local radius', async () => {
     enableNotifications();
     setIndex([locatedAsset('a', LAT_A, OLD)]);
     mockAppState.currentState = 'active';
     const { mgr } = loadManager();
     await mgr.startForegroundFallback();
 
-    mockWatchCb!({ coords: { latitude: LAT_A + 0.01, longitude: -117.0 } }); // ~1.1km
+    // ~1.1km away — beyond even the widest (400m ceiling) adaptive radius.
+    mockWatchCb!({ coords: { latitude: LAT_A + 0.01, longitude: -117.0 } });
     await flush();
 
     expect(mockShowBanner).not.toHaveBeenCalled();

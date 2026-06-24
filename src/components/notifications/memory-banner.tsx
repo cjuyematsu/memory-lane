@@ -13,7 +13,6 @@ import BellIcon from '@/assets/icons/bell.svg';
 import { Colors, DisplayFont, Ink, Paper } from '@/constants/theme';
 import { clearBanner, useBanner } from '@/lib/foreground-banner';
 import { requestNearMe } from '@/lib/near-me-request';
-import { recordEngaged } from '@/lib/notification-engagement';
 import { setPendingCluster } from '@/lib/pending-cluster';
 
 const VISIBLE_MS = 5000;
@@ -84,7 +83,6 @@ export function MemoryBanner() {
         ? 'Tap to see 1 photo from here'
         : `Tap to see ${banner.count} photos from here`;
     onPress = () => {
-      recordEngaged(clusterId);
       setPendingCluster(clusterId);
       clearBanner();
     };

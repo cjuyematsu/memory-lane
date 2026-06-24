@@ -9,15 +9,19 @@ import {
   invalidateIndex,
   type AssetIndex,
 } from '@/hooks/use-located-assets';
+import { getClusters } from '@/hooks/use-photo-clusters';
+import { NEARME_OPTS, relevanceRadiusFor } from '@/lib/relevance-radius';
 import { distanceMeters } from '@/utils/distance';
 
 // Near Me shows what you took right where you're standing — meant to feel like
 // walking around campus, so it's tight: ~150m, roughly the building cluster
 // you're in, not the whole neighborhood. One radius for photos and videos alike:
 // videos used to reach twice as far (1000m vs 500m), which surfaced real-GPS
-// clips from ~a mile away (e.g. an old high school). The memories story is
-// tighter still (~50m cluster cells). Tune this if Near Me feels too broad or
-// too narrow (the boundary tests in use-nearby-assets.test.ts assert this value).
+// clips from ~a mile away (e.g. an old high school). This is now the DEFAULT /
+// fallback radius: the hook passes computeNearby a density-adapted radius
+// (NEARME_OPTS in @/lib/relevance-radius) that tightens where your photo
+// clusters pack close and widens where they're spread out. Tune this fallback
+// if Near Me feels too broad or too narrow.
 export const NEAR_ME_RADIUS_METERS = 150;
 const ESTIMATE_WINDOW_MS = 30 * 60 * 1000;
 
@@ -109,7 +113,8 @@ function nearestIndex(sortedTimes: number[], target: number): number {
 export function computeNearby(
   index: AssetIndex,
   assets: Asset[],
-  origin: { latitude: number; longitude: number }
+  origin: { latitude: number; longitude: number },
+  radiusM: number = NEAR_ME_RADIUS_METERS
 ): { photos: NearbyAsset[]; videos: NearbyAsset[] } {
   const byId = new Map(assets.map((a) => [a.id, a]));
   const photos: NearbyAsset[] = [];
@@ -123,7 +128,7 @@ export function computeNearby(
     const location: AssetLocation = { latitude: la.lat, longitude: la.lng };
     const d = distanceMeters(location, origin);
     if (la.mediaType === MediaType.VIDEO) {
-      if (d <= NEAR_ME_RADIUS_METERS) {
+      if (d <= radiusM) {
         videos.push(
           stableNearby({
             asset,
@@ -137,7 +142,7 @@ export function computeNearby(
       }
     } else {
       if (la.creationTime != null) anchors.push({ creationTime: la.creationTime, location });
-      if (d <= NEAR_ME_RADIUS_METERS) {
+      if (d <= radiusM) {
         photos.push(
           stableNearby({
             asset,
@@ -163,7 +168,7 @@ export function computeNearby(
       if (!anchor) continue;
       if (Math.abs(anchor.creationTime - uv.creationTime) > ESTIMATE_WINDOW_MS) continue;
       const d = distanceMeters(anchor.location, origin);
-      if (d > NEAR_ME_RADIUS_METERS) continue;
+      if (d > radiusM) continue;
       videos.push(
         stableNearby({
           asset,
@@ -241,7 +246,16 @@ export function useNearbyAssets(assets: Asset[] | null, origin: Origin): NearbyS
   const index = getIndex();
   const { photos, videos } = useMemo(() => {
     if (!index || !assets || !origin) return { photos: [], videos: [] };
-    return computeNearby(index, assets, origin);
+    // Tighten in dense areas / widen in sparse ones, keyed on the spacing of
+    // your photo clusters around where you're standing. getClusters() derives
+    // from the same index, so this recomputes whenever the index (a dep) changes.
+    const radiusM = relevanceRadiusFor(
+      origin.latitude,
+      origin.longitude,
+      getClusters() ?? [],
+      NEARME_OPTS
+    );
+    return computeNearby(index, assets, origin, radiusM);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [index, assets, origin?.latitude, origin?.longitude]);
 

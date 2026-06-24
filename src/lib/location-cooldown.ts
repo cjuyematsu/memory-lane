@@ -15,7 +15,14 @@ export type LocationCooldownOptions = {
 };
 
 export type LocationCooldown = {
-  isInCooldown: (lat: number, lng: number, now?: number) => Promise<boolean>;
+  // radiusOverride lets a caller widen/tighten the quiet zone per place (e.g. to
+  // track local photo density); falls back to the factory's radiusM.
+  isInCooldown: (
+    lat: number,
+    lng: number,
+    now?: number,
+    radiusOverride?: number
+  ) => Promise<boolean>;
   markNotified: (lat: number, lng: number, now?: number) => Promise<void>;
 };
 
@@ -54,12 +61,14 @@ export function createLocationCooldown({
   async function isInCooldown(
     lat: number,
     lng: number,
-    now: number = Date.now()
+    now: number = Date.now(),
+    radiusOverride?: number
   ): Promise<boolean> {
+    const radius = radiusOverride ?? radiusM;
     const entries = await load();
     return entries.some(
       (e) =>
-        now - e.at < windowMs && distanceMeters(lat, lng, e.lat, e.lng) <= radiusM
+        now - e.at < windowMs && distanceMeters(lat, lng, e.lat, e.lng) <= radius
     );
   }
 

@@ -9,6 +9,7 @@ import { isBannerActive, showBanner } from '@/lib/foreground-banner';
 import { shouldGreet } from '@/lib/nearby-greeting';
 import * as greetingCooldown from '@/lib/nearby-greeting-cooldown';
 import { getPendingCluster } from '@/lib/pending-cluster';
+import { isRoutineLocation, recordPresence } from '@/lib/place-presence';
 
 // How long after an open we wait before reading the nearby count, so a fresh GPS
 // fix + the 300ms feed debounce + an index sync can settle (mirrors Near Me's
@@ -17,8 +18,13 @@ import { getPendingCluster } from '@/lib/pending-cluster';
 const GREET_DELAY_MS = 1200;
 
 async function maybeGreet(lat: number, lng: number, count: number): Promise<void> {
+  // Every app open logs presence here — this is also how the home/work signal
+  // is learned for users who never enabled OS notifications.
+  await recordPresence(lat, lng);
   // Cheap synchronous gates first, so we skip the disk read when obviously off.
   if (count <= 0 || isBannerActive() || getPendingCluster() != null) return;
+  // Don't greet at home/work — the whole point is not surfacing photos there.
+  if (await isRoutineLocation(lat, lng)) return;
   const inCooldown = await greetingCooldown.isInCooldown(lat, lng);
   // Re-check the live flags after the await — a geofence banner or a
   // notification tap may have arrived during the cooldown read.

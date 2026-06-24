@@ -19,16 +19,28 @@ import {
 } from '@/hooks/use-photo-clusters';
 import { showBanner } from '@/lib/foreground-banner';
 import { isInCooldown, markNotified } from '@/lib/notification-cooldown';
-import { isSuppressed, recordSurfaced } from '@/lib/notification-engagement';
+import {
+  isRoutineLocation,
+  recordPresence,
+  routineDayCount,
+} from '@/lib/place-presence';
+import {
+  clusterRelevanceRadius,
+  NEARME_OPTS,
+  relevanceRadiusFor,
+  SUPPRESS_OPTS,
+  TRIGGER_OPTS,
+} from '@/lib/relevance-radius';
 import { formatTimeAgo } from '@/utils/time-ago';
 
 export const GEOFENCE_TASK_NAME = 'memory-feed-geofence';
 export const ANDROID_CHANNEL_ID = 'memories';
 
 const MAX_REGIONS = 20;
-// iOS region monitoring is only ~100m accurate, so a tighter radius produces
-// missed / late "enter" events. 120m still reads as "here" (clusters are ~50m).
-const PROXIMITY_RADIUS_METERS = 120;
+// Geofence region radius is no longer a single constant: it adapts to local
+// photo-cluster spacing (TRIGGER_OPTS in @/lib/relevance-radius) so a memory in
+// a sparse area triggers from farther, while dense areas clamp to the ~120m
+// iOS region-monitoring accuracy floor — unchanged from before.
 const ROTATION_DISTANCE_METERS = 500;
 const ROTATION_INTERVAL_MS = 6 * 60 * 60 * 1000;
 // When there are more notifiable clusters than region slots, one slot becomes
@@ -94,9 +106,18 @@ async function handleClusterEnter(clusterId: string): Promise<void> {
   // doesn't fire even when its recent photos sit in an adjacent grid cell.
   if (!cluster || !clusters || !isAreaNotifiable(cluster, clusters)) return;
 
-  if (await isInCooldown(cluster.centerLat, cluster.centerLng)) return;
-  // Skip places the user keeps ignoring.
-  if (await isSuppressed(clusterId)) return;
+  // Log that you're physically here (every real enter feeds the home/work
+  // signal), then bail if this is a routine place — somewhere you keep returning
+  // to, like home or the office, should never ping you with a memory.
+  await recordPresence(cluster.centerLat, cluster.centerLng);
+  if (await isRoutineLocation(cluster.centerLat, cluster.centerLng)) return;
+
+  // The quiet-zone radius tracks local density too, so suppression and
+  // triggering agree — in a sparse area where regions widen, two clusters a few
+  // hundred meters apart won't both fire on a single arrival.
+  const cooldownRadius = clusterRelevanceRadius(cluster, clusters, SUPPRESS_OPTS);
+  if (await isInCooldown(cluster.centerLat, cluster.centerLng, undefined, cooldownRadius))
+    return;
 
   if (AppState.currentState === 'active') {
     // Foreground: show the in-app banner instead of a system notification.
@@ -115,7 +136,6 @@ async function handleClusterEnter(clusterId: string): Promise<void> {
     });
   }
   await markNotified(cluster.centerLat, cluster.centerLng);
-  await recordSurfaced(clusterId);
 }
 
 // Dev-only: fire the same notification path on a short delay so the app can
@@ -131,7 +151,7 @@ export async function fireTestNotification(): Promise<boolean> {
     content: {
       title: 'Memory nearby',
       body: cluster
-        ? `You took something here ${formatTimeAgo(cluster.oldestCreationTime)}`
+        ? `You took a photo here ${formatTimeAgo(cluster.oldestCreationTime)}`
         : 'Test notification — your notification setup works.',
       data: cluster ? { clusterId: cluster.id } : { test: true },
     },
@@ -196,6 +216,62 @@ export async function triggerNearestMemoryHere(): Promise<{
   return {
     ok: true,
     message: `Nearest memory is ~${Math.round(nearestDist)}m away (${nearest.assetIds.length} photo${nearest.assetIds.length === 1 ? '' : 's'}). Background the app now — it arrives in ~${TEST_NOTIFICATION_DELAY_S}s.`,
+  };
+}
+
+// Dev-only: read out the adaptive radii at the user's current spot — the Near Me
+// radius and, for the nearest few clusters, each one's trigger radius plus the
+// exact gate that would (or wouldn't) let it notify right now. Mirrors the
+// handleClusterEnter pipeline so the otherwise-invisible density adaptation is
+// inspectable in the field (e.g. walking an old campus).
+export async function inspectRadiiHere(): Promise<{
+  ok: boolean;
+  message: string;
+}> {
+  const perm = await Location.getForegroundPermissionsAsync();
+  if (perm.status !== 'granted') {
+    return { ok: false, message: 'Location permission is needed to read the radii here.' };
+  }
+  const clusters = getClusters() ?? (await loadClustersFromDisk());
+  if (!clusters || clusters.length === 0) {
+    return { ok: false, message: 'No located photos yet — open Near Me once to build the index.' };
+  }
+  const pos = await Location.getCurrentPositionAsync({
+    accuracy: Location.Accuracy.Balanced,
+  });
+  const { latitude, longitude } = pos.coords;
+  const nearMe = Math.round(relevanceRadiusFor(latitude, longitude, clusters, NEARME_OPTS));
+
+  const nearest = clusters
+    .map((c) => ({ c, d: distanceMeters(latitude, longitude, c.centerLat, c.centerLng) }))
+    .sort((a, b) => a.d - b.d)
+    .slice(0, 6);
+
+  const lines: string[] = [];
+  for (const { c, d } of nearest) {
+    const trig = Math.round(clusterRelevanceRadius(c, clusters, TRIGGER_OPTS));
+    let status: string;
+    if (!isClusterNotifiable(c)) status = 'too recent (<90d)';
+    else if (!isAreaNotifiable(c, clusters)) status = 'recent media nearby';
+    else if (d > trig) status = `out of range (${trig}m)`;
+    else {
+      const cd = clusterRelevanceRadius(c, clusters, SUPPRESS_OPTS);
+      if (await isRoutineLocation(c.centerLat, c.centerLng)) {
+        status = `home/work (${await routineDayCount(c.centerLat, c.centerLng)} days)`;
+      } else if (await isInCooldown(c.centerLat, c.centerLng, undefined, cd)) {
+        status = `cooldown (${Math.round(cd)}m)`;
+      } else {
+        status = `WOULD FIRE (≤${trig}m)`;
+      }
+    }
+    lines.push(`• ${Math.round(d)}m · ${c.assetIds.length}📷 · ${status}`);
+  }
+
+  return {
+    ok: true,
+    message:
+      `Near Me radius: ${nearMe}m\n${clusters.length} places total\n\n` +
+      `Nearest places:\n${lines.join('\n')}`,
   };
 }
 
@@ -300,7 +376,9 @@ async function registerGeofencesAt(
     identifier: c.id,
     latitude: c.centerLat,
     longitude: c.centerLng,
-    radius: PROXIMITY_RADIUS_METERS,
+    // Adapts to local cluster spacing: dense areas clamp to the ~120m floor
+    // (unchanged), sparse areas widen so a far-flung memory still triggers.
+    radius: clusterRelevanceRadius(c, clusters, TRIGGER_OPTS),
     notifyOnEnter: true,
     notifyOnExit: false,
   }));
@@ -312,8 +390,10 @@ async function registerGeofencesAt(
       BOUNDARY_MAX_RADIUS_METERS,
       Math.max(
         BOUNDARY_MIN_RADIUS_METERS,
+        // Subtract the uncovered cluster's OWN (possibly widened) trigger radius
+        // so the boundary's exit still fires before its enter region would.
         distanceMeters(lat, lng, firstUncovered.centerLat, firstUncovered.centerLng) -
-          PROXIMITY_RADIUS_METERS
+          clusterRelevanceRadius(firstUncovered, clusters, TRIGGER_OPTS)
       )
     );
     regions.push({
@@ -370,7 +450,9 @@ async function checkFallbackPosition(lat: number, lng: number): Promise<void> {
   // no-op once cached).
   const clusters = getClusters() ?? (await loadClustersFromDisk());
   if (!clusters) return;
-  const cluster = findClusterWithinRadius(lat, lng, PROXIMITY_RADIUS_METERS);
+  // Match the background enter path: the search radius adapts to local density.
+  const radius = relevanceRadiusFor(lat, lng, clusters, TRIGGER_OPTS);
+  const cluster = findClusterWithinRadius(lat, lng, radius);
   if (!cluster) return;
   await enqueue(
     () => handleClusterEnter(cluster.id),

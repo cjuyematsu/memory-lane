@@ -15,11 +15,9 @@ import {
   stopForegroundFallback,
   stopGeofencingIfActive,
 } from '@/lib/geofence-manager';
-import { recordEngaged } from '@/lib/notification-engagement';
 import { setPendingCluster } from '@/lib/pending-cluster';
 
 function openCluster(clusterId: string) {
-  recordEngaged(clusterId);
   setPendingCluster(clusterId);
 }
 

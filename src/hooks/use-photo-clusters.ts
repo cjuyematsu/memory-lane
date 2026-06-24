@@ -8,6 +8,7 @@ import {
   type AssetIndex,
   type LocatedAsset,
 } from '@/hooks/use-located-assets';
+import { relevanceRadiusFor, SUPPRESS_OPTS } from '@/lib/relevance-radius';
 
 // ~50m grid quantization. 1° latitude ≈ 111km, so 0.0005° ≈ 55m.
 const CELL_SIZE_DEG = 0.0005;
@@ -17,11 +18,6 @@ const CELL_SIZE_DEG = 0.0005;
 // point is returning somewhere after a long absence. (A newest photo this old
 // also guarantees the memory itself is old.) Tune here.
 const RECENT_VISIT_MS = 90 * 24 * 60 * 60 * 1000; // ~3 months
-// Home/work spread across several ~50m grid cells, so we treat a spot as
-// "recently visited" if ANY recent photo/video sits within this radius — not
-// just inside the one cell that fired. This is what actually excludes home
-// when your recent photos there landed in an adjacent cell.
-const RECENT_AREA_RADIUS_M = 150;
 
 export type PhotoCluster = {
   // Stable identifier derived from the grid cell — survives across sessions
@@ -143,19 +139,26 @@ export function distanceMeters(
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
-// True if any cluster within RECENT_AREA_RADIUS_M of this point holds a
+// True if any cluster within the local relevance radius of this point holds a
 // photo/video from inside the recency window — i.e. you've been here lately.
+// The radius adapts to local density (SUPPRESS_OPTS) so it widens in step with
+// the geofence trigger: in a sparse area a recent photo a few hundred meters
+// away still suppresses an old neighbor, keeping home/work from notifying.
 function hasRecentMediaNearby(
   clusters: PhotoCluster[],
   lat: number,
   lng: number,
-  now: number
+  now: number,
+  excludeId?: string
 ): boolean {
+  // The point is a cluster center, so exclude that cluster from the spacing
+  // measurement — otherwise it sits at distance 0 and consumes a neighbor slot.
+  const radius = relevanceRadiusFor(lat, lng, clusters, SUPPRESS_OPTS, excludeId);
   return clusters.some(
     (c) =>
       c.newestCreationTime != null &&
       now - c.newestCreationTime <= RECENT_VISIT_MS &&
-      distanceMeters(lat, lng, c.centerLat, c.centerLng) <= RECENT_AREA_RADIUS_M
+      distanceMeters(lat, lng, c.centerLat, c.centerLng) <= radius
   );
 }
 
@@ -169,7 +172,13 @@ export function isAreaNotifiable(
   now: number = Date.now()
 ): boolean {
   if (!isClusterNotifiable(cluster, now)) return false;
-  return !hasRecentMediaNearby(clusters, cluster.centerLat, cluster.centerLng, now);
+  return !hasRecentMediaNearby(
+    clusters,
+    cluster.centerLat,
+    cluster.centerLng,
+    now,
+    cluster.id
+  );
 }
 
 // Takes the cluster list explicitly (rather than reading the in-memory index)

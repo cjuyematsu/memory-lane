@@ -14,7 +14,11 @@ import {
 
 import { DisplayFont, Ink, Paper } from '@/constants/theme';
 import { diagnoseAndroidMetadata } from '@/lib/android-metadata-diagnostic';
-import { fireTestNotification, triggerNearestMemoryHere } from '@/lib/geofence-manager';
+import {
+  fireTestNotification,
+  inspectRadiiHere,
+  triggerNearestMemoryHere,
+} from '@/lib/geofence-manager';
 import {
   setNotificationsEnabled,
   useNotificationSettings,
@@ -162,6 +166,14 @@ export function SettingsSheet({
                   );
                 }}>
                 <Text style={styles.devButtonLabel}>Send test notification</Text>
+              </Pressable>
+              <Pressable
+                style={styles.devButton}
+                onPress={async () => {
+                  const res = await inspectRadiiHere();
+                  Alert.alert(res.ok ? 'Radii here' : 'Could not read radii', res.message);
+                }}>
+                <Text style={styles.devButtonLabel}>Show radii here</Text>
               </Pressable>
               {Platform.OS === 'android' ? (
                 <Pressable

@@ -55,15 +55,15 @@ describe('notification cooldown', () => {
     expect(await isInCooldown(LAT + 2 * DEG_100M, LNG, NOW + HOUR)).toBe(false);
   });
 
-  it('expires after six hours', async () => {
+  it('expires after twelve hours', async () => {
     await markNotified(LAT, LNG, NOW);
-    expect(await isInCooldown(LAT, LNG, NOW + 6 * HOUR - 1)).toBe(true);
-    expect(await isInCooldown(LAT, LNG, NOW + 6 * HOUR)).toBe(false);
+    expect(await isInCooldown(LAT, LNG, NOW + 12 * HOUR - 1)).toBe(true);
+    expect(await isInCooldown(LAT, LNG, NOW + 12 * HOUR)).toBe(false);
   });
 
   it('prunes expired entries on write', async () => {
     await markNotified(LAT, LNG, NOW);
-    await markNotified(LAT + 1, LNG + 1, NOW + 7 * HOUR);
+    await markNotified(LAT + 1, LNG + 1, NOW + 13 * HOUR);
     const entries = JSON.parse(mockStore.get(FILE)!);
     expect(entries).toHaveLength(1);
     expect(entries[0].lat).toBe(LAT + 1);
