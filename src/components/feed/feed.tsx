@@ -651,7 +651,7 @@ export function Feed({
     const canAsk = permission.canAskAgain;
     return (
       <SafeAreaView style={styles.center}>
-        <Text style={styles.title}>Mems</Text>
+        <Text style={styles.title}>PastPic</Text>
         <Text style={styles.body}>We need access to your photos.</Text>
         <Pressable
           style={styles.button}

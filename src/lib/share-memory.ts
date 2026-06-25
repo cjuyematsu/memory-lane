@@ -246,7 +246,7 @@ export async function prepareRawShare(
   }
 
   try {
-    const dest = new File(Paths.cache, `mems-share-original.${shareExtension(uri, filename)}`);
+    const dest = new File(Paths.cache, `pastpic-share-original.${shareExtension(uri, filename)}`);
     await new File(uri).copy(dest, { overwrite: true });
     return { uri: dest.uri, mimeType: mimeTypeForFilename(dest.name) };
   } catch {

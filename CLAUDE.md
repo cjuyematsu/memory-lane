@@ -25,7 +25,7 @@ Day-to-day development is `npx expo start` against an already-installed dev buil
 
 ## What this app is
 
-"Mems" surfaces old photo memories tied to **place**. Its core feature: while you move around, it geofences clusters of locations where you took photos long ago and notifies you when you return to one — then shows those photos. Two tabs:
+"PastPic" surfaces old photo memories tied to **place**. Its core feature: while you move around, it geofences clusters of locations where you took photos long ago and notifies you when you return to one — then shows those photos. Two tabs:
 - **Camera Roll** — a shuffle feed of single framed photos (`components/feed/`).
 - **Near Me** — a grid of photos/videos taken within a radius of your current location (`components/near-me/`).
 

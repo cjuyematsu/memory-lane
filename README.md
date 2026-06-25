@@ -1,6 +1,6 @@
-# Mems
+# PastPic
 
-Mems surfaces old photo memories tied to **place**. As you move around, it geofences
+PastPic surfaces old photo memories tied to **place**. As you move around, it geofences
 clusters of spots where you took photos long ago and notifies you when you return —
 then shows you those photos.
 
