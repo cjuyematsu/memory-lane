@@ -707,38 +707,50 @@ export function Feed({
 
       {isReady && entryIndex !== null && layoutMeasured ? (
         <FeedCardEventsContext.Provider value={cardEvents}>
-          <FlatList
-            ref={listRef}
-            data={assets}
-            keyExtractor={(item) => item.id}
-            renderItem={({ item }) => (
-              <FeedCard
-                asset={item}
-                isCurrent={item.id === currentId}
-                isActive={isActive}
-                width={layout.width}
-                height={layout.height}
-                frame={frame}
-                onZoomChange={handleZoom}
+          {/* Clip the pager to below the navbar/band so a paging swipe never
+              slides a photo up behind the header — matches Near Me, which is
+              inset below the same `frame.top` line. The double-View keeps the
+              list in full-screen coordinates (frame math + paging unchanged):
+              the inner View is shifted up by frame.top so the list still lays
+              out from screen 0, while the outer overflow:hidden trims anything
+              above frame.top. */}
+          <View style={[styles.pagerClip, { top: frame.top }]}>
+            <View style={[styles.pagerInner, { top: -frame.top, height: layout.height }]}>
+              <FlatList
+                ref={listRef}
+                style={StyleSheet.absoluteFill}
+                data={assets}
+                keyExtractor={(item) => item.id}
+                renderItem={({ item }) => (
+                  <FeedCard
+                    asset={item}
+                    isCurrent={item.id === currentId}
+                    isActive={isActive}
+                    width={layout.width}
+                    height={layout.height}
+                    frame={frame}
+                    onZoomChange={handleZoom}
+                  />
+                )}
+                scrollEnabled={!zooming}
+                pagingEnabled
+                snapToInterval={layout.height}
+                snapToAlignment="start"
+                disableIntervalMomentum
+                showsVerticalScrollIndicator={false}
+                initialScrollIndex={entryIndex}
+                getItemLayout={getItemLayout}
+                decelerationRate="fast"
+                windowSize={5}
+                initialNumToRender={1}
+                maxToRenderPerBatch={3}
+                removeClippedSubviews
+                onViewableItemsChanged={onViewableItemsChanged}
+                viewabilityConfig={VIEWABILITY_CONFIG}
+                extraData={`${currentId}|${isActive}`}
               />
-            )}
-            scrollEnabled={!zooming}
-            pagingEnabled
-            snapToInterval={layout.height}
-            snapToAlignment="start"
-            disableIntervalMomentum
-            showsVerticalScrollIndicator={false}
-            initialScrollIndex={entryIndex}
-            getItemLayout={getItemLayout}
-            decelerationRate="fast"
-            windowSize={5}
-            initialNumToRender={1}
-            maxToRenderPerBatch={3}
-            removeClippedSubviews
-            onViewableItemsChanged={onViewableItemsChanged}
-            viewabilityConfig={VIEWABILITY_CONFIG}
-            extraData={`${currentId}|${isActive}`}
-          />
+            </View>
+          </View>
         </FeedCardEventsContext.Provider>
       ) : null}
 
@@ -821,6 +833,22 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Paper,
+  },
+  // Clip region for the pager: starts at the band line (`top: frame.top`, set
+  // inline) and runs to the bottom, hiding anything that scrolls above it.
+  pagerClip: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    overflow: 'hidden',
+  },
+  // Counter-shifted up by frame.top (set inline) so the FlatList still lays out
+  // from screen 0 — paging height and the card's frame math are unchanged.
+  pagerInner: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
   },
   center: {
     flex: 1,
