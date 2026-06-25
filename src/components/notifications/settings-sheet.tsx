@@ -23,6 +23,7 @@ import {
   setNotificationsEnabled,
   useNotificationSettings,
 } from '@/hooks/use-notification-settings';
+import { restartOnboarding } from '@/hooks/use-onboarding';
 import {
   getPermissionState,
   requestAllPermissions,
@@ -118,17 +119,22 @@ export function SettingsSheet({
               <View style={styles.rowText}>
                 <Text style={styles.rowLabel}>Memory notifications</Text>
               </View>
-              {requesting ? (
-                <ActivityIndicator color={Ink} />
-              ) : (
-                <Switch
-                  value={settings.enabled}
-                  onValueChange={handleToggle}
-                  trackColor={{ true: Ink, false: '#D1D1D6' }}
-                  thumbColor={Paper}
-                  ios_backgroundColor="#D1D1D6"
-                />
-              )}
+              {/* Fixed-size slot so swapping the Switch for the spinner doesn't
+                  change the label column's width (which would reflow "MEMORY
+                  NOTIFICATIONS" between one and two lines, flashing mid-toggle). */}
+              <View style={styles.control}>
+                {requesting ? (
+                  <ActivityIndicator color={Ink} />
+                ) : (
+                  <Switch
+                    value={settings.enabled}
+                    onValueChange={handleToggle}
+                    trackColor={{ true: Ink, false: '#D1D1D6' }}
+                    thumbColor={Paper}
+                    ios_backgroundColor="#D1D1D6"
+                  />
+                )}
+              </View>
             </View>
             {/* Full-width below the toggle row, not boxed into the left column. */}
             <Text style={styles.rowSub}>
@@ -143,6 +149,22 @@ export function SettingsSheet({
               <Text style={styles.warningAction}>Open Settings</Text>
             </Pressable>
           ) : null}
+
+          <View style={styles.aboutBlock}>
+            <Pressable
+              style={styles.replayRow}
+              onPress={() => {
+                // Re-show the first-run tour from the top. The gate is reactive,
+                // so the overlay reappears once the sheet closes.
+                restartOnboarding();
+                onClose();
+              }}>
+              <Text style={styles.replayLabel}>How PastPic works</Text>
+            </Pressable>
+            <Text style={styles.privacyNote}>
+              Everything stays on your phone. Your photos and location never leave your device.
+            </Text>
+          </View>
 
           {__DEV__ ? (
             <View style={styles.devRow}>
@@ -161,7 +183,7 @@ export function SettingsSheet({
                   Alert.alert(
                     ok ? 'Test scheduled' : 'Notifications off',
                     ok
-                      ? 'Background the app now — a test notification will appear in ~8 seconds.'
+                      ? 'Background the app now. A test notification will appear in ~8 seconds.'
                       : 'Turn on "Memory notifications" (or allow them in system Settings) first.'
                   );
                 }}>
@@ -224,6 +246,13 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 4,
   },
+  // Reserves the Switch's footprint so the spinner swap can't reflow the label.
+  control: {
+    width: 51,
+    height: 31,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   rowLabel: {
     fontFamily: DisplayFont,
     color: Ink,
@@ -252,6 +281,28 @@ const styles = StyleSheet.create({
     color: Ink,
     fontSize: 12,
     textTransform: 'uppercase',
+  },
+  aboutBlock: {
+    gap: 10,
+  },
+  replayRow: {
+    alignSelf: 'flex-start',
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    borderRadius: 32,
+    borderWidth: 1,
+    borderColor: Ink,
+  },
+  replayLabel: {
+    fontFamily: DisplayFont,
+    color: Ink,
+    fontSize: 13,
+    textTransform: 'uppercase',
+  },
+  privacyNote: {
+    color: '#777',
+    fontSize: 12,
+    lineHeight: 17,
   },
   devRow: {
     gap: 8,

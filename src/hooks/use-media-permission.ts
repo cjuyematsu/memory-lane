@@ -26,8 +26,8 @@ function notify() {
 }
 
 // Read-only: never prompts. The first-run OS prompt is owned by the onboarding
-// sequencer (see `ensureMediaPermission` / `src/lib/onboarding-permissions.ts`)
-// so the photos dialog can't stack on top of the location one.
+// flow (see `ensureMediaPermission`, called from the photos step of
+// components/onboarding/onboarding-flow.tsx).
 async function refresh(): Promise<MediaLibrary.PermissionResponse> {
   const res = await MediaLibrary.getPermissionsAsync(false, MEDIA_PERMISSIONS);
   cached = res;
@@ -44,8 +44,8 @@ async function request(): Promise<MediaLibrary.PermissionResponse> {
 
 // Drives the photos step of onboarding: surface the OS prompt only while we can
 // still ask (undetermined), then push the result to every consumer so the app
-// unlocks the instant access is granted. Awaited by the sequencer so the
-// location prompt never appears until photos has been answered.
+// unlocks the instant access is granted. Awaited by the onboarding flow so the
+// step's spinner stays up until the user has answered.
 export async function ensureMediaPermission(): Promise<MediaLibrary.PermissionResponse> {
   let res = await MediaLibrary.getPermissionsAsync(false, MEDIA_PERMISSIONS);
   if (!res.granted && res.canAskAgain) {

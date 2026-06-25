@@ -9,15 +9,15 @@ export type LocationState =
   | { status: 'error'; message: string }
   | { status: 'ready'; coords: { latitude: number; longitude: number } };
 
-// Mounted consumers register here so the onboarding sequencer and the app
+// Mounted consumers register here so the onboarding flow and the app
 // foreground re-check can tell them to re-read the location permission and
 // fetch a fix (without prompting).
 const subscribers = new Set<() => void>();
 let appStateSubscribed = false;
 
-// Called by `src/lib/onboarding-permissions.ts` after the location step, and on
-// every app foreground (below), so a grant made in system Settings populates
-// Near Me on its own — no manual tap.
+// Called by the onboarding flow (components/onboarding/onboarding-flow.tsx)
+// after the location step, and on every app foreground (below), so a grant made
+// in system Settings populates Near Me on its own — no manual tap.
 export function notifyLocationChanged() {
   for (const cb of subscribers) cb();
 }

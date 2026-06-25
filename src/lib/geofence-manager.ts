@@ -152,7 +152,7 @@ export async function fireTestNotification(): Promise<boolean> {
       title: 'Memory nearby',
       body: cluster
         ? `You took a photo here ${formatTimeAgo(cluster.oldestCreationTime)}`
-        : 'Test notification — your notification setup works.',
+        : 'Test notification: your notification setup works.',
       data: cluster ? { clusterId: cluster.id } : { test: true },
     },
     trigger: {
@@ -180,12 +180,12 @@ export async function triggerNearestMemoryHere(): Promise<{
   if (!(await ensureNotificationPermission())) {
     return {
       ok: false,
-      message: 'Notifications are off — turn on “Memory notifications” (or allow them in system Settings) first.',
+      message: 'Notifications are off. Turn on “Memory notifications” (or allow them in system Settings) first.',
     };
   }
   const clusters = getClusters() ?? (await loadClustersFromDisk());
   if (!clusters || clusters.length === 0) {
-    return { ok: false, message: 'No located photos yet — open Near Me once to build the index.' };
+    return { ok: false, message: 'No located photos yet. Open Near Me once to build the index.' };
   }
   const pos = await Location.getCurrentPositionAsync({
     accuracy: Location.Accuracy.Balanced,
@@ -215,7 +215,7 @@ export async function triggerNearestMemoryHere(): Promise<{
   });
   return {
     ok: true,
-    message: `Nearest memory is ~${Math.round(nearestDist)}m away (${nearest.assetIds.length} photo${nearest.assetIds.length === 1 ? '' : 's'}). Background the app now — it arrives in ~${TEST_NOTIFICATION_DELAY_S}s.`,
+    message: `Nearest memory is ~${Math.round(nearestDist)}m away (${nearest.assetIds.length} photo${nearest.assetIds.length === 1 ? '' : 's'}). Background the app now. It arrives in ~${TEST_NOTIFICATION_DELAY_S}s.`,
   };
 }
 
@@ -234,7 +234,7 @@ export async function inspectRadiiHere(): Promise<{
   }
   const clusters = getClusters() ?? (await loadClustersFromDisk());
   if (!clusters || clusters.length === 0) {
-    return { ok: false, message: 'No located photos yet — open Near Me once to build the index.' };
+    return { ok: false, message: 'No located photos yet. Open Near Me once to build the index.' };
   }
   const pos = await Location.getCurrentPositionAsync({
     accuracy: Location.Accuracy.Balanced,

@@ -23,10 +23,11 @@ import { LoadingPolaroid } from '@/components/brand/loading-polaroid';
 import { MemoryBanner } from '@/components/notifications/memory-banner';
 import { NearbyMemoriesGreeter } from '@/components/notifications/nearby-memories-greeter';
 import { NotificationOrchestrator } from '@/components/notifications/notification-orchestrator';
+import { OnboardingFlow } from '@/components/onboarding/onboarding-flow';
 import { ShareHost } from '@/components/share/share-host';
 import { Paper } from '@/constants/theme';
+import { useOnboardingStatus } from '@/hooks/use-onboarding-status';
 import { configureImageCache, installMemoryCacheReaper } from '@/lib/image-cache';
-import { runOnboardingPermissions } from '@/lib/onboarding-permissions';
 
 // Bound the expo-image disk cache once, before any photo renders, so it can't
 // grow without limit as the feed/shuffle decode images across the library.
@@ -50,11 +51,15 @@ export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
     'ArchivoExpanded-Black': require('@/assets/fonts/ArchivoExpanded-Black.ttf'),
   });
-  // Surface the first-run permission prompts in order (photos -> location ->
-  // notifications) once per launch. Idempotent, so re-mounts are harmless.
-  useEffect(() => {
-    runOnboardingPermissions();
-  }, []);
+  // First-run permission prompts now live in the onboarding flow (rendered
+  // below when `onboarding === 'active'`), which primes each permission with an
+  // explanation before surfacing the OS dialog — no more rapid-fire prompts on
+  // launch. The app itself (`<Slot />` + the location-using greeter) is
+  // withheld until onboarding finishes: a live Near Me under the overlay would
+  // otherwise re-request location on the AppState 'active' that fires when a
+  // permission dialog dismisses.
+  const onboarding = useOnboardingStatus();
+
   // Drop the decoded-image memory cache whenever the app backgrounds, so a
   // large foreground working set can't get the app jetsammed while suspended.
   useEffect(() => {
@@ -84,7 +89,9 @@ export default function RootLayout() {
   const [loaderMounted, setLoaderMounted] = useState(true);
   const loaderOpacity = useSharedValue(1);
   const loaderStyle = useAnimatedStyle(() => ({ opacity: loaderOpacity.value }));
-  const done = ready && minElapsed;
+  // Also hold the loader until the onboarding decision resolves, so we never
+  // flash a blank Paper frame before either the app or the flow is chosen.
+  const done = ready && minElapsed && onboarding !== 'deciding';
   useEffect(() => {
     if (!done) return;
     loaderOpacity.value = withTiming(0, {
@@ -99,10 +106,16 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: Paper }}>
       <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
         <NotificationOrchestrator />
-        <NearbyMemoriesGreeter />
-        {ready ? <Slot /> : null}
+        {/* Greeter touches location and can pop a banner — keep it out of the
+            tree until onboarding is done, alongside the app. */}
+        {onboarding === 'done' ? <NearbyMemoriesGreeter /> : null}
+        {ready && onboarding === 'done' ? <Slot /> : null}
         <MemoryBanner />
         <ShareHost />
+        {/* Full-screen first-run onboarding; replaces the app until finished,
+            and sits below the boot loader so the Polaroid covers the
+            pre-decision flash. */}
+        {ready && onboarding === 'active' ? <OnboardingFlow /> : null}
         {loaderMounted ? (
           <Animated.View
             style={[styles.loaderOverlay, loaderStyle]}

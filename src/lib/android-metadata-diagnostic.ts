@@ -14,7 +14,7 @@ import { AssetField, MediaType, Query } from 'expo-media-library';
 // file:// image source rendered blank.
 export async function diagnoseAndroidMetadata(sampleSize = 25): Promise<string> {
   if (Platform.OS !== 'android') {
-    return 'Diagnostic is Android-only — on iOS, PHAsset exposes location directly.';
+    return 'Diagnostic is Android-only. On iOS, PHAsset exposes location directly.';
   }
 
   const PERM = PermissionsAndroid.PERMISSIONS.ACCESS_MEDIA_LOCATION;
