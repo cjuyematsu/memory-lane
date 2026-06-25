@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   FlatList,
   Linking,
   Platform,
@@ -25,6 +24,7 @@ import { Asset, MediaType } from 'expo-media-library';
 
 import ShareIcon from '@/assets/icons/share.svg';
 import ShuffleIcon from '@/assets/icons/shuffle.svg';
+import { LoadingPolaroid } from '@/components/brand/loading-polaroid';
 import { FeedCard } from '@/components/feed/feed-card';
 import { FeedCardEventsContext, type FeedCardEvents } from '@/components/feed/feed-context';
 import { PhotoFrame, frameLayout, type FrameLayout } from '@/components/feed/photo-frame';
@@ -643,11 +643,7 @@ export function Feed({
   );
 
   if (!permission) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator color={Ink} />
-      </View>
-    );
+    return <LoadingPolaroid />;
   }
 
   if (!permission.granted) {
@@ -689,8 +685,8 @@ export function Feed({
       ) : null}
 
       {isLoading && (!splash || !splashLatched) ? (
-        <View style={styles.center}>
-          <ActivityIndicator color={Ink} />
+        <View style={StyleSheet.absoluteFill}>
+          <LoadingPolaroid />
         </View>
       ) : null}
 

@@ -71,6 +71,16 @@ export const Ink = '#111111'; // text, borders — every black EXCEPT the letter
 export const Letterbox = '#000000'; // fill behind a contained (landscape) photo
 export const DisplayFont = 'ArchivoExpanded-Black'; // see assets/fonts + _layout useFonts
 
+// Brand accent, drawn from the logo. The gallery look stays monochrome around
+// the photos; the accent only ever touches chrome / motion / empty surfaces.
+// Coral is already the app's brand color in app.json (notification tint +
+// Android adaptive-icon background), so reusing it is consistent, not new.
+export const Accent = '#EE5D6C'; // coral — the logo's middle band
+// The five logo/app-icon bands, top → bottom (the master-SVG sunset values).
+// Used as a single gradient in exactly one place (the Near Me empty-state
+// hairline); not for general theming.
+export const BrandSpectrum = ['#6A0D83', '#CE4993', '#EE5D6C', '#FB9062', '#EEAF61'] as const;
+
 // Every framed photo is cropped/letterboxed to this ratio (768 × 1024).
 export const PhotoRatio = 768 / 1024; // width / height = 0.75
 export const FrameMargin = 10; // side gutter around the single-photo frame / grid panel

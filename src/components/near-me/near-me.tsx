@@ -4,6 +4,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import BellIcon from '@/assets/icons/bell.svg';
 import RefreshIcon from '@/assets/icons/refresh.svg';
+import { LoadingPolaroid } from '@/components/brand/loading-polaroid';
 import { frameTop } from '@/components/feed/photo-frame';
 import { ClusterView } from '@/components/near-me/cluster-view';
 import { Grid } from '@/components/near-me/grid';
@@ -220,11 +221,7 @@ export function NearMe({
   );
 
   if (!mediaPermission) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator color={Ink} />
-      </View>
-    );
+    return <LoadingPolaroid />;
   }
 
   if (!mediaPermission.granted) {
@@ -308,11 +305,7 @@ export function NearMe({
         feedState.status === 'idle' ||
         feedState.status === 'loading')
     ) {
-      return (
-        <View style={styles.center}>
-          <ActivityIndicator color={Ink} />
-        </View>
-      );
+      return <LoadingPolaroid />;
     }
     if (feedState.status === 'error') {
       return (
@@ -355,9 +348,7 @@ export function NearMe({
         )}
       </SafeAreaView>
     ) : (
-      <View style={styles.center}>
-        <ActivityIndicator color={Ink} />
-      </View>
+      <LoadingPolaroid />
     );
   })();
 
@@ -465,10 +456,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: Paper,
+    // Softer, more diffuse float with an Ink hairline — matches the memory
+    // banner card so every floating surface in the app reads the same way.
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(17,17,17,0.10)',
     shadowColor: '#000',
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 6 },
     elevation: 5,
   },
 });

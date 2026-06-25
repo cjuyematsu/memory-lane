@@ -188,6 +188,10 @@ const styles = StyleSheet.create({
   cellInner: {
     flex: 1,
     margin: GAP / 2,
+    // Softly rounded tiles — gentler than the tight Apple-Photos grid. The
+    // gutter already shows the Paper canvas between tiles, so the rounding reads
+    // cleanly against white.
+    borderRadius: 6,
     backgroundColor: '#E9E9E9',
     overflow: 'hidden',
     alignItems: 'center',

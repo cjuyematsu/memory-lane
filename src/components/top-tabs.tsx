@@ -17,6 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { scheduleOnRN } from 'react-native-worklets';
 
 import ArrowLeftIcon from '@/assets/icons/arrow-left.svg';
+import { SpectrumRule } from '@/components/brand/spectrum-rule';
 import { Feed } from '@/components/feed/feed';
 import { NearMe } from '@/components/near-me/near-me';
 import { DisplayFont, Ink, Paper } from '@/constants/theme';
@@ -215,6 +216,9 @@ export function TopTabs() {
               </Text>
             </Pressable>
           </View>
+          {/* Persistent edge-to-edge spectrum band — the always-on brand
+              signature that unifies both tabs and shows the actual logo colors. */}
+          <SpectrumRule width={width} height={3} rx={0} />
         </SafeAreaView>
       ) : null}
     </View>
