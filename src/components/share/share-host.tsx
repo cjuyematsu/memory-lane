@@ -39,6 +39,7 @@ export function ShareHost() {
   const target = useShareTarget();
   const [phase, setPhase] = useState<'choosing' | 'working'>('choosing');
   // The asset whose framed export is being captured (null = raw share or none).
+  // The framed export always uses the 9:16 STORY_CANVAS (see ShareCard).
   const [framedAsset, setFramedAsset] = useState<Asset | null>(null);
   const cardRef = useRef<View>(null);
   const captured = useRef(false);

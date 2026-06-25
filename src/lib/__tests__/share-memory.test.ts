@@ -1,6 +1,10 @@
 import {
+  computeShareFrame,
+  MIN_FRAME_RATIO,
   mimeTypeForFilename,
   RAW_SHARE_TIMEOUT_MS,
+  SHARE_LAYOUT,
+  STORY_CANVAS,
   ShareTimeoutError,
   shareExtension,
   shareOptionsFor,
@@ -18,6 +22,65 @@ describe('shareOptionsFor', () => {
   it('offers raw-only for videos (no framed-with-caption still)', () => {
     const opts = shareOptionsFor(true);
     expect(opts).toEqual([{ mode: 'raw', label: 'Share video' }]);
+  });
+});
+
+describe('STORY_CANVAS', () => {
+  it('is the 1080×1920 (9:16) social upload size', () => {
+    expect(STORY_CANVAS.width).toBe(1080);
+    expect(STORY_CANVAS.height).toBe(1920);
+    expect(STORY_CANVAS.aspect).toBeCloseTo(1080 / 1920);
+  });
+});
+
+describe('computeShareFrame', () => {
+  // Recreate the available box the same way the function does, so assertions can
+  // check the frame is fully contained.
+  const avail = (canvasW: number, canvasH: number) => ({
+    w: canvasW - 2 * canvasW * SHARE_LAYOUT.marginFrac,
+    h:
+      canvasH -
+      2 * canvasH * SHARE_LAYOUT.vPadFrac -
+      canvasW * SHARE_LAYOUT.captionReserveFrac -
+      canvasH * SHARE_LAYOUT.liftFrac,
+  });
+
+  it('uses the full content width for a portrait photo in the 9:16 story canvas', () => {
+    const W = 360;
+    const H = 640; // 9:16
+    const { frameW, frameH, cropped } = computeShareFrame(W, H, 0.75);
+    const a = avail(W, H);
+    expect(frameW).toBeCloseTo(a.w); // width-constrained → photo stays large
+    expect(frameH).toBeLessThanOrEqual(a.h + 0.001);
+    expect(frameW / frameH).toBeCloseTo(0.75); // shape preserved
+    expect(cropped).toBe(false);
+  });
+
+  it('drives off the height when a photo would overflow (e.g. a squarer canvas)', () => {
+    const W = 360;
+    const H = 360; // 1:1 — exercises the height-constrained branch
+    const { frameW, frameH } = computeShareFrame(W, H, 0.75);
+    const a = avail(W, H);
+    expect(frameH).toBeCloseTo(a.h); // height-constrained
+    expect(frameW).toBeLessThanOrEqual(a.w + 0.001);
+    expect(frameW / frameH).toBeCloseTo(0.75); // shape still preserved
+  });
+
+  it('clamps and cover-crops a photo taller than MIN_FRAME_RATIO', () => {
+    const { frameW, frameH, cropped } = computeShareFrame(360, 640, 0.4);
+    expect(cropped).toBe(true);
+    expect(frameW / frameH).toBeCloseTo(MIN_FRAME_RATIO);
+  });
+
+  it('never lets the frame exceed the available box across aspect ratios', () => {
+    const W = 360;
+    const H = Math.round(W / STORY_CANVAS.aspect);
+    const a = avail(W, H);
+    for (const ratio of [0.3, 0.5, 0.75, 1, 1.5, 2.5]) {
+      const { frameW, frameH } = computeShareFrame(W, H, ratio);
+      expect(frameW).toBeLessThanOrEqual(a.w + 0.001);
+      expect(frameH).toBeLessThanOrEqual(a.h + 0.001);
+    }
   });
 });
 

@@ -67,6 +67,82 @@ export function shareOptionsFor(isVideo: boolean): ShareOption[] {
   ];
 }
 
+// ── Framed-export canvas sizing ──────────────────────────────────────────────
+//
+// The OS share sheet never tells us which app the user picks (and we render the
+// image before the sheet opens), so we can't auto-match the destination. We
+// export a single 9:16 "story" canvas: it fills Instagram Stories/Reels and
+// TikTok edge-to-edge (the dominant share surfaces) and keeps the photo large.
+// Post (4:5) / square (1:1) were tried and dropped — height-constraining the
+// photo to those shapes made it look tiny with lots of dead white; anyone who
+// wants a feed post can crop the story.
+export type ShareCanvas = {
+  // Final exported pixel dimensions, and width / height (used to derive the
+  // off-screen layout's logical height).
+  width: number;
+  height: number;
+  aspect: number;
+};
+
+// 1080×1920 — the standard 9:16 social upload size.
+export const STORY_CANVAS: ShareCanvas = {
+  width: 1080,
+  height: 1920,
+  aspect: 1080 / 1920,
+};
+
+// Fractions that define the framed-export composition. Expressed relative to the
+// canvas (width for horizontal/text metrics, height for vertical breathing) so
+// the look is identical at any resolution. These reproduce the Camera Roll feed
+// card (`feed-card.tsx` / `photo-frame.tsx`) — a 3:4 `PhotoRatio` frame, the
+// photo cover-cropped to fill it (contain only for landscape), 10px-equivalent
+// margin + border, and the same date/place caption — so a shared memory looks
+// exactly like the feed, just without the floating share/shuffle buttons. Each
+// value is the feed's absolute px divided by the ~393pt feed screen width.
+export const SHARE_LAYOUT = {
+  marginFrac: 0.025, // side gutter ≈ feed FrameMargin (10px), frac of canvas width
+  vPadFrac: 0.04, // min top & bottom breathing each, frac of canvas height
+  captionReserveFrac: 0.16, // space kept for the date+place block, frac of width
+  liftFrac: 0.05, // bottom padding → lifts the block above center (≈½ this up)
+  borderFrac: 0.026, // Letterbox frame border ≈ feed's 10px, frac of width
+  captionGapFrac: 0.061, // gap below frame ≈ feed's 24px, frac of width
+  dateFontFrac: 0.076, // date line ≈ feed's 30px, frac of width
+  placeFontFrac: 0.028, // place line ≈ feed's 11px, frac of width
+} as const;
+
+// A photo taller than this is widened to the cap and cover-cropped instead of
+// becoming a width-wasting sliver (matches the Near Me viewer). Anything at this
+// ratio or wider keeps its exact shape.
+export const MIN_FRAME_RATIO = 2 / 3;
+
+// Fit the framed photo into a canvas, preserving its (clamped) aspect ratio so it
+// never overflows: start at the full content width, and if that makes it taller
+// than the available height (after reserving the caption, breathing, and the lift
+// padding), drive the size off the height instead. Pure — unit-tested.
+// `canvasW`/`canvasH` are in the off-screen layout's logical units; the result is
+// in the same units.
+export function computeShareFrame(
+  canvasW: number,
+  canvasH: number,
+  ratio: number
+): { frameW: number; frameH: number; cropped: boolean } {
+  const r = Math.max(ratio, MIN_FRAME_RATIO);
+  const cropped = ratio < MIN_FRAME_RATIO;
+  const margin = canvasW * SHARE_LAYOUT.marginFrac;
+  const vPad = canvasH * SHARE_LAYOUT.vPadFrac;
+  const captionReserve = canvasW * SHARE_LAYOUT.captionReserveFrac;
+  const lift = canvasH * SHARE_LAYOUT.liftFrac;
+  const availW = canvasW - 2 * margin;
+  const availH = canvasH - 2 * vPad - captionReserve - lift;
+  let frameW = availW;
+  let frameH = frameW / r;
+  if (frameH > availH) {
+    frameH = availH;
+    frameW = frameH * r;
+  }
+  return { frameW, frameH, cropped };
+}
+
 // The lowercased extension of a path or filename (no leading dot), or undefined
 // when there isn't one. Ignores query/fragment so a `file://…/x.heic?foo` works.
 function extensionOf(pathOrName: string): string | undefined {
