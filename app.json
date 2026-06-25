@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "mems",
+    "name": "PastPic",
     "slug": "mems",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -61,17 +61,17 @@
       [
         "expo-media-library",
         {
-          "photosPermission": "Mems needs access to your photos to surface memories from places you've been.",
-          "savePhotosPermission": "Mems needs permission to save photos to your library.",
+          "photosPermission": "PastPic needs access to your photos to surface memories from places you've been.",
+          "savePhotosPermission": "PastPic needs permission to save photos to your library.",
           "isAccessMediaLocationEnabled": true
         }
       ],
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "Mems uses your location to surface photos you took nearby.",
-          "locationAlwaysAndWhenInUsePermission": "Mems needs background location so it can quietly notify you when you walk past a place you took photos a year+ ago.",
-          "locationAlwaysPermission": "Mems uses background location to notify you about memories from places you walk past.",
+          "locationWhenInUsePermission": "PastPic uses your location to surface photos you took nearby.",
+          "locationAlwaysAndWhenInUsePermission": "PastPic needs background location so it can quietly notify you when you walk past a place you took photos a year+ ago.",
+          "locationAlwaysPermission": "PastPic uses background location to notify you about memories from places you walk past.",
           "isIosBackgroundLocationEnabled": true,
           "isAndroidBackgroundLocationEnabled": true
         }
