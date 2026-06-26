@@ -14,9 +14,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 
+import BellIcon from '@/assets/icons/bell.svg';
 import { SpectrumRule } from '@/components/brand/spectrum-rule';
-import { MockBanner, MockFeedCard, MockGrid } from '@/components/onboarding/mocks';
-import { Colors, DisplayFont, Ink, Paper } from '@/constants/theme';
+import { MockFeedCard, MockGrid } from '@/components/onboarding/mocks';
+import { Colors, DisplayFont, Ink, Paper, PhotoRatio } from '@/constants/theme';
 import { notifyLocationChanged } from '@/hooks/use-current-location';
 import { ensureMediaPermission } from '@/hooks/use-media-permission';
 import { setNotificationsEnabled } from '@/hooks/use-notification-settings';
@@ -27,6 +28,10 @@ import {
 } from '@/hooks/use-onboarding';
 
 const polaroid = require('@/assets/images/polaroid.png');
+// The cropped polaroid asset's width / height. Sizing the welcome/done hero from
+// this (rather than a hand-picked box) keeps it pixel-matched to the boot loader
+// (loading-polaroid.tsx) and avoids any contain-fit letterboxing.
+const POLAROID_ASPECT = 508 / 602;
 
 type StepKey =
   | 'welcome'
@@ -60,30 +65,82 @@ type StepContent = {
   onSecondary?: () => void;
 };
 
-// A drawn padlock for the privacy screen (no lock icon in assets/icons).
-function LockGlyph() {
+// A drawn padlock for the privacy screen, sized to sit inside the glyph circle
+// (no lock icon in assets/icons).
+function LockGlyph({ size }: { size: number }) {
+  const bodyW = size * 0.74;
+  const bodyH = size * 0.58;
+  const shackleW = size * 0.48;
+  const shackleH = size * 0.36;
+  const shackleBorder = size * 0.1;
   return (
-    <View style={styles.lockWrap}>
-      <View style={styles.lockShackle} />
-      <View style={styles.lockBody} />
+    <View style={{ alignItems: 'center' }}>
+      <View
+        style={{
+          width: shackleW,
+          height: shackleH,
+          borderWidth: shackleBorder,
+          borderBottomWidth: 0,
+          borderColor: Ink,
+          borderTopLeftRadius: shackleW / 2,
+          borderTopRightRadius: shackleW / 2,
+          marginBottom: -shackleBorder * 0.5,
+        }}
+      />
+      <View style={{ width: bodyW, height: bodyH, borderRadius: size * 0.12, backgroundColor: Ink }} />
     </View>
   );
 }
 
-// A drawn map pin for the background-location screen.
-function PinGlyph() {
+// A drawn map pin for the background-location screen: a rounded square with one
+// sharp corner, rotated -45° so that corner points straight down.
+function PinGlyph({ size }: { size: number }) {
+  const sq = size * 0.7; // the rotated square's diagonal ≈ size (its visual height)
+  const hole = sq * 0.36;
   return (
-    <View style={styles.pinWrap}>
-      <View style={styles.pin}>
-        <View style={styles.pinHole} />
+    <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
+      <View
+        style={{
+          width: sq,
+          height: sq,
+          backgroundColor: Ink,
+          borderTopLeftRadius: sq / 2,
+          borderTopRightRadius: sq / 2,
+          borderBottomRightRadius: sq / 2,
+          borderBottomLeftRadius: sq * 0.08,
+          transform: [{ rotate: '-45deg' }],
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}>
+        <View style={{ width: hole, height: hole, borderRadius: hole / 2, backgroundColor: Paper }} />
       </View>
+    </View>
+  );
+}
+
+// A black outline ring that holds a single glyph, giving the concept steps
+// (privacy / notifications / background) a consistent container — present, but
+// distinct from the polaroid, which is reserved for welcome/done.
+function GlyphCircle({ size, children }: { size: number; children: React.ReactNode }) {
+  return (
+    <View
+      style={{
+        width: size,
+        height: size,
+        borderRadius: size / 2,
+        borderWidth: 1.5,
+        borderColor: Ink,
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}>
+      {children}
     </View>
   );
 }
 
 export function OnboardingFlow() {
   const insets = useSafeAreaInsets();
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
   // Resume where a previous (killed) run left off. The gate has already loaded
   // the persisted state by the time this mounts, so the cache is warm.
   const [step, setStep] = useState(() =>
@@ -99,6 +156,10 @@ export function OnboardingFlow() {
 
   const advance = useCallback(() => setStep((s) => s + 1), []);
   const goTo = useCallback((k: StepKey) => setStep(ORDER.indexOf(k)), []);
+  // Linear back through the ordered steps; the header back button is hidden on
+  // the first step. Permission asks only fire on the primary button, so stepping
+  // back never re-prompts.
+  const goBack = useCallback(() => setStep((s) => Math.max(0, s - 1)), []);
 
   // Surface one OS prompt, then navigate. `next` runs even on denial/error, so a
   // declined permission still moves the flow forward (the in-app locked screens
@@ -168,13 +229,46 @@ export function OnboardingFlow() {
   const finish = useCallback(() => setOnboardingCompleted(true), []);
 
   const key = ORDER[step];
+  // One fixed-height stage holds the hero on every step, and each hero is
+  // bottom-aligned within it (styles.stage), so the gap from the hero down to the
+  // title is identical on every step — copy and buttons never move, and a smaller
+  // hero just gets more breathing room above it rather than a void before its
+  // caption. Every hero is sized to roughly fill this stage so none floats as a
+  // tiny mark. Capped fraction of screen height so the tallest step still clears
+  // the pinned footer on the shortest supported screen (iOS 16.4 floor = 667pt).
+  const stageH = Math.min(230, height * 0.28);
   const previewWidth = Math.min(width - 96, 280);
+  // Welcome / done polaroid, sized from the asset aspect. This is the reference
+  // footprint every other hero is sized against, so no step's visual dwarfs the
+  // rest as you click through.
+  const heroH = Math.min(178, stageH * 0.78);
+  const heroW = heroH * POLAROID_ASPECT;
+  // Concept steps (privacy / notifications / background) show their symbol in a
+  // black outline circle the same height as the polaroid, so the focal mark keeps
+  // the same size and position across all five non-mock steps.
+  const circleD = heroH;
+  const glyphSize = heroH * 0.44;
+  // Feed-card mock: a 3:4 frame + caption that fills the stage height.
+  const feedW = Math.min(180, (stageH - 76) * PhotoRatio);
+  // Near Me grid: keep it square at the polaroid's height instead of letting it
+  // sprawl wider and taller than every other hero.
+  const gridW = Math.min(previewWidth, heroH);
+  // Top-anchor the hero + title at a fixed offset (rather than centering the whole
+  // block) so they land at the same Y on every step; only the body text below grows
+  // with longer copy, and the footer stays pinned — keeps the eye from jumping.
+  const contentTop = Math.min(Math.max(height * 0.08, 28), 88);
 
   const content: StepContent = (() => {
     switch (key) {
       case 'welcome':
         return {
-          preview: <Image source={polaroid} style={styles.hero} resizeMode="contain" />,
+          preview: (
+            <Image
+              source={polaroid}
+              style={{ width: heroW, height: heroH }}
+              resizeMode="contain"
+            />
+          ),
           title: 'Welcome to PastPic',
           body: "Your old photos, tied to the places you took them. Here's a quick tour.",
           primaryLabel: 'Get started',
@@ -182,7 +276,11 @@ export function OnboardingFlow() {
         };
       case 'privacy':
         return {
-          preview: <LockGlyph />,
+          preview: (
+            <GlyphCircle size={circleD}>
+              <LockGlyph size={glyphSize} />
+            </GlyphCircle>
+          ),
           title: 'It all stays on your phone',
           body: 'PastPic reads your photos and your location right here on your device. Nothing is uploaded. No account, no servers. Your memories never leave your phone.',
           primaryLabel: 'Got it',
@@ -190,7 +288,7 @@ export function OnboardingFlow() {
         };
       case 'photos':
         return {
-          preview: <MockFeedCard width={Math.min(previewWidth * 0.72, 188)} />,
+          preview: <MockFeedCard width={feedW} />,
           title: 'Camera Roll',
           body: 'A shuffle of your old photos, each one framed with when and where you took it.',
           reassure: true,
@@ -199,7 +297,7 @@ export function OnboardingFlow() {
         };
       case 'location':
         return {
-          preview: <MockGrid width={previewWidth} />,
+          preview: <MockGrid width={gridW} />,
           title: 'Near Me',
           body: 'See the photos you took right around where you’re standing now.',
           reassure: true,
@@ -208,7 +306,11 @@ export function OnboardingFlow() {
         };
       case 'notifications':
         return {
-          preview: <MockBanner width={previewWidth} />,
+          preview: (
+            <GlyphCircle size={circleD}>
+              <BellIcon width={glyphSize} height={glyphSize} fill={Ink} />
+            </GlyphCircle>
+          ),
           title: 'Memory notifications',
           body: 'Walk past a place you took photos a year or more ago and PastPic quietly reminds you, then shows them.',
           reassure: true,
@@ -219,7 +321,11 @@ export function OnboardingFlow() {
         };
       case 'background':
         return {
-          preview: <PinGlyph />,
+          preview: (
+            <GlyphCircle size={circleD}>
+              <PinGlyph size={glyphSize} />
+            </GlyphCircle>
+          ),
           title: 'Notify me on the move',
           body: 'To notice when you come back to a place, PastPic checks your location in the background, even while the app is closed. Pick "Always Allow" on the next screen.',
           reassure: true,
@@ -231,7 +337,13 @@ export function OnboardingFlow() {
       case 'done':
       default:
         return {
-          preview: <Image source={polaroid} style={styles.hero} resizeMode="contain" />,
+          preview: (
+            <Image
+              source={polaroid}
+              style={{ width: heroW, height: heroH }}
+              resizeMode="contain"
+            />
+          ),
           title: "You're all set",
           body: 'Swipe between Camera Roll and Near Me. Tune anything later from Settings.',
           primaryLabel: 'Start exploring',
@@ -245,17 +357,30 @@ export function OnboardingFlow() {
     // unmounts this on completion) rather than hard-cutting.
     <Animated.View exiting={FadeOut.duration(280)} style={[styles.root, { paddingTop: insets.top }]}>
       <View style={styles.header}>
+        {step > 0 ? (
+          <Pressable
+            style={styles.back}
+            onPress={goBack}
+            disabled={requesting}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityLabel="Go back">
+            <View style={styles.chevron} />
+          </Pressable>
+        ) : null}
         <Text style={styles.wordmark}>PASTPIC</Text>
       </View>
       <SpectrumRule width={width} height={3} rx={0} />
 
       <Animated.View key={key} entering={FadeIn.duration(240)} style={styles.body}>
-        <View style={styles.center}>
-          <View style={styles.previewArea}>{content.preview}</View>
+        <View style={[styles.center, { paddingTop: contentTop }]}>
+          <View style={[styles.stage, { height: stageH }]}>{content.preview}</View>
           <View style={styles.copy}>
             <Text style={styles.title}>{content.title}</Text>
             <Text style={styles.bodyText}>{content.body}</Text>
-            {content.reassure ? <Text style={styles.reassure}>{PRIVACY_NOTE}</Text> : null}
+            {/* Always occupy the reassurance line's height so the title-to-button
+                distance is constant; the text only shows on permission steps. */}
+            <Text style={styles.reassure}>{content.reassure ? PRIVACY_NOTE : ' '}</Text>
           </View>
         </View>
 
@@ -271,11 +396,15 @@ export function OnboardingFlow() {
             )}
           </Pressable>
 
-          {content.secondaryLabel ? (
-            <Pressable onPress={content.onSecondary} disabled={requesting} hitSlop={8}>
-              <Text style={styles.secondaryLabel}>{content.secondaryLabel}</Text>
-            </Pressable>
-          ) : null}
+          {/* Fixed-height slot so the primary button + dots hold their position
+              whether or not a step offers a "Maybe later" action. */}
+          <View style={styles.secondarySlot}>
+            {content.secondaryLabel ? (
+              <Pressable onPress={content.onSecondary} disabled={requesting} hitSlop={8}>
+                <Text style={styles.secondaryLabel}>{content.secondaryLabel}</Text>
+              </Pressable>
+            ) : null}
+          </View>
 
           <View style={styles.dots}>
             {ORDER.map((k, i) => (
@@ -299,9 +428,28 @@ const styles = StyleSheet.create({
     zIndex: 150,
   },
   header: {
-    height: 32,
+    height: 44,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  back: {
+    position: 'absolute',
+    left: 16,
+    top: 0,
+    bottom: 0,
+    width: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // A CSS-style chevron: a square with two adjacent borders, rotated to point left.
+  chevron: {
+    width: 11,
+    height: 11,
+    borderLeftWidth: 2.5,
+    borderBottomWidth: 2.5,
+    borderColor: Ink,
+    transform: [{ rotate: '45deg' }],
+    marginLeft: 3,
   },
   wordmark: {
     fontFamily: DisplayFont,
@@ -314,19 +462,22 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 28,
   },
+  // Top-anchored (paddingTop set inline) so the hero + title hold a constant Y on
+  // every step; the footer is pinned separately, so variable body length only
+  // changes the whitespace above the button, never the focal point.
   center: {
     flex: 1,
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 32,
+    justifyContent: 'flex-start',
+    gap: 40,
   },
-  previewArea: {
+  // Fixed-height stage (height set inline). Centers the hero so every hero's
+  // optical center sits at the same Y; a shorter hero just gets breathing room
+  // above and below rather than moving the focal point.
+  stage: {
+    alignSelf: 'stretch',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  hero: {
-    width: 150,
-    height: 178,
   },
   copy: {
     alignItems: 'center',
@@ -349,6 +500,7 @@ const styles = StyleSheet.create({
   reassure: {
     color: '#999',
     fontSize: 12,
+    lineHeight: 16,
     textAlign: 'center',
     marginTop: 2,
   },
@@ -380,6 +532,13 @@ const styles = StyleSheet.create({
     color: Colors.light.textSecondary,
     fontSize: 14,
   },
+  // Reserves the secondary action's footprint on every step so the primary
+  // button and dots don't shift when a step has no "Maybe later".
+  secondarySlot: {
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   dots: {
     flexDirection: 'row',
     gap: 6,
@@ -394,51 +553,5 @@ const styles = StyleSheet.create({
   dotActive: {
     width: 18,
     backgroundColor: Ink,
-  },
-  lockWrap: {
-    alignItems: 'center',
-  },
-  lockShackle: {
-    width: 30,
-    height: 18,
-    borderWidth: 5,
-    borderBottomWidth: 0,
-    borderColor: Ink,
-    borderTopLeftRadius: 15,
-    borderTopRightRadius: 15,
-    marginBottom: -2,
-  },
-  lockBody: {
-    width: 46,
-    height: 36,
-    borderRadius: 8,
-    backgroundColor: Ink,
-  },
-  pinWrap: {
-    width: 70,
-    height: 70,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  // Teardrop: a rounded square with one sharp corner (bottom-left), rotated -45°
-  // (counter-clockwise) so that corner swings down to a point. Rotating +45°
-  // instead sends the point left, laying the pin on its side.
-  pin: {
-    width: 44,
-    height: 44,
-    backgroundColor: Ink,
-    borderTopLeftRadius: 22,
-    borderTopRightRadius: 22,
-    borderBottomRightRadius: 22,
-    borderBottomLeftRadius: 2,
-    transform: [{ rotate: '-45deg' }],
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  pinHole: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: Paper,
   },
 });

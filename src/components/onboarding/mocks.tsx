@@ -27,7 +27,7 @@ export function MockFeedCard({ width = 188 }: { width?: number }) {
         <View style={styles.photo} />
       </View>
       <Text style={styles.date}>2 YEARS AGO</Text>
-      <Text style={styles.place}>LISBON, PORTUGAL</Text>
+      <Text style={styles.place}>COOPERSTOWN</Text>
     </View>
   );
 }
