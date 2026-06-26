@@ -17,6 +17,10 @@ import {
   nearestNotifiableClusters,
   type PhotoCluster,
 } from '@/hooks/use-photo-clusters';
+import {
+  isClusterInCooldown,
+  markClusterNotified,
+} from '@/lib/cluster-cooldown';
 import { showBanner } from '@/lib/foreground-banner';
 import { isInCooldown, markNotified } from '@/lib/notification-cooldown';
 import {
@@ -26,9 +30,9 @@ import {
 } from '@/lib/place-presence';
 import {
   clusterRelevanceRadius,
+  COOLDOWN_OPTS,
   NEARME_OPTS,
   relevanceRadiusFor,
-  SUPPRESS_OPTS,
   TRIGGER_OPTS,
 } from '@/lib/relevance-radius';
 import { formatTimeAgo } from '@/utils/time-ago';
@@ -112,10 +116,15 @@ async function handleClusterEnter(clusterId: string): Promise<void> {
   await recordPresence(cluster.centerLat, cluster.centerLng);
   if (await isRoutineLocation(cluster.centerLat, cluster.centerLng)) return;
 
-  // The quiet-zone radius tracks local density too, so suppression and
+  // This exact place already surfaced its memory recently — the memory is
+  // "spent", so stay quiet for ~90 days even as you keep passing through.
+  if (await isClusterInCooldown(clusterId)) return;
+
+  // Short spatial quiet zone: don't let a near-duplicate cluster double-ping on
+  // the same arrival. The radius tracks local density too, so suppression and
   // triggering agree — in a sparse area where regions widen, two clusters a few
-  // hundred meters apart won't both fire on a single arrival.
-  const cooldownRadius = clusterRelevanceRadius(cluster, clusters, SUPPRESS_OPTS);
+  // hundred meters apart won't both fire at once.
+  const cooldownRadius = clusterRelevanceRadius(cluster, clusters, COOLDOWN_OPTS);
   if (await isInCooldown(cluster.centerLat, cluster.centerLng, undefined, cooldownRadius))
     return;
 
@@ -136,6 +145,7 @@ async function handleClusterEnter(clusterId: string): Promise<void> {
     });
   }
   await markNotified(cluster.centerLat, cluster.centerLng);
+  await markClusterNotified(clusterId);
 }
 
 // Dev-only: fire the same notification path on a short delay so the app can
@@ -255,9 +265,11 @@ export async function inspectRadiiHere(): Promise<{
     else if (!isAreaNotifiable(c, clusters)) status = 'recent media nearby';
     else if (d > trig) status = `out of range (${trig}m)`;
     else {
-      const cd = clusterRelevanceRadius(c, clusters, SUPPRESS_OPTS);
+      const cd = clusterRelevanceRadius(c, clusters, COOLDOWN_OPTS);
       if (await isRoutineLocation(c.centerLat, c.centerLng)) {
         status = `home/work (${await routineDayCount(c.centerLat, c.centerLng)} days)`;
+      } else if (await isClusterInCooldown(c.id)) {
+        status = 'spent (≤90d ago)';
       } else if (await isInCooldown(c.centerLat, c.centerLng, undefined, cd)) {
         status = `cooldown (${Math.round(cd)}m)`;
       } else {

@@ -160,9 +160,9 @@ describe('radii analysis', () => {
   it('suburban (medium): spacing lands the radius between floor and ceiling', () => {
     setIndex([
       place('home', 0, 0),
-      place('park', 0, 600),
-      place('cafe', 600, 0),
-      place('school', 600, 600),
+      place('park', 0, 400),
+      place('cafe', 400, 0),
+      place('school', 400, 400),
     ]);
     const clusters = getClusters()!;
     console.log('\n=== SUBURBAN (medium) ===');
@@ -189,12 +189,11 @@ describe('radii analysis', () => {
     const clusters = getClusters()!;
     const trigs = clusters.map((c) => clusterRelevanceRadius(c, clusters, TRIGGER_OPTS));
 
-    const buckets = { floor: 0, low: 0, mid: 0, high: 0, ceiling: 0 };
+    const buckets = { floor: 0, low: 0, mid: 0, ceiling: 0 };
     for (const t of trigs) {
       if (t <= TRIGGER_OPTS.floor) buckets.floor++;
-      else if (t < 200) buckets.low++;
-      else if (t < 300) buckets.mid++;
-      else if (t < TRIGGER_OPTS.ceiling) buckets.high++;
+      else if (t < 180) buckets.low++;
+      else if (t < TRIGGER_OPTS.ceiling) buckets.mid++;
       else buckets.ceiling++;
     }
     const sorted = [...trigs].sort((a, b) => a - b);
@@ -209,10 +208,9 @@ describe('radii analysis', () => {
     );
     console.log(`trigger radius — median ${median}m`);
     console.log(`  floor (=120m)   ${String(buckets.floor).padStart(4)}  ${pct(buckets.floor)}`);
-    console.log(`  120–200m        ${String(buckets.low).padStart(4)}  ${pct(buckets.low)}`);
-    console.log(`  200–300m        ${String(buckets.mid).padStart(4)}  ${pct(buckets.mid)}`);
-    console.log(`  300–<400m       ${String(buckets.high).padStart(4)}  ${pct(buckets.high)}`);
-    console.log(`  ceiling (=400m) ${String(buckets.ceiling).padStart(4)}  ${pct(buckets.ceiling)}`);
+    console.log(`  120–180m        ${String(buckets.low).padStart(4)}  ${pct(buckets.low)}`);
+    console.log(`  180–<250m       ${String(buckets.mid).padStart(4)}  ${pct(buckets.mid)}`);
+    console.log(`  ceiling (=250m) ${String(buckets.ceiling).padStart(4)}  ${pct(buckets.ceiling)}`);
 
     for (const t of trigs) {
       expect(t).toBeGreaterThanOrEqual(TRIGGER_OPTS.floor);

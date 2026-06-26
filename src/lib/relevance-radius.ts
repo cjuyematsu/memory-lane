@@ -21,21 +21,41 @@ export type RelevanceRadiusOptions = {
 
 // Geofence trigger + foreground fallback. iOS region monitoring is only ~100m
 // accurate, so 120m is a hard floor — these effectively only WIDEN in sparse
-// areas. Dense areas (clusters ~55m apart) clamp to 120 = today's behavior.
+// areas. Dense areas (clusters ~55m apart) clamp to 120 = today's behavior. The
+// 250m ceiling is a deliberate cap: even a lone memory in an empty area should
+// ping you when you're roughly a couple blocks away, not a quarter mile (400m
+// felt far and random); 250m is the hard top end for every notification radius.
 export const TRIGGER_OPTS: RelevanceRadiusOptions = {
   floor: 120,
-  ceiling: 400,
+  ceiling: 250,
   k: 2,
   multiplier: 0.5,
 };
 
-// Home/work suppression neighborhood + notification quiet-zone cooldown. floor
-// 150 matches today's RECENT_AREA_RADIUS_M / cooldown radius, and is kept
-// symmetric with the trigger so a widened sparse-area trigger can't outrun its
-// own "have I been here recently" suppression and start firing at home.
+// Home/work "still active here" suppression neighborhood: if you've shot
+// anything recently within this radius of an old cluster, treat the area as
+// still part of your life and stay quiet. floor 150 is intentionally wide and
+// kept symmetric with the trigger so a widened sparse-area trigger can't outrun
+// its own "have I been here recently" suppression and start firing at home — so
+// the ceiling matches the trigger's 250m cap.
 export const SUPPRESS_OPTS: RelevanceRadiusOptions = {
   floor: 150,
-  ceiling: 400,
+  ceiling: 250,
+  k: 2,
+  multiplier: 0.5,
+};
+
+// Notification quiet-zone cooldown radius — the spatial guard that stops two
+// near-duplicate clusters double-pinging on one arrival. Decoupled from
+// SUPPRESS_OPTS with a tighter 100m floor: in a dense memory area (e.g. an old
+// campus) distinct spots a bit over 100m apart should EACH notify, so the floor
+// is small enough not to merge separate buildings while still collapsing the
+// same quad. Ceiling held at the 250m notification cap. The long-term "don't
+// repeat the same memory" job lives in the per-cluster cooldown
+// (cluster-cooldown.ts), not here.
+export const COOLDOWN_OPTS: RelevanceRadiusOptions = {
+  floor: 100,
+  ceiling: 250,
   k: 2,
   multiplier: 0.5,
 };

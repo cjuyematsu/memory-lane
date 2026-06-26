@@ -105,9 +105,11 @@ const RECENT = Date.now() - 5 * DAY;
 // Grid cell ids for CELL_SIZE_DEG = 0.0005 at lng -117 (lng cell -234000).
 const LAT_A = 34.0; // cell 68000 -> ~55m south of B
 const LAT_B = 34.0005; // cell 68001
+const LAT_C = 34.001; // cell 68002, ~111m from A (still inside the 150m routine area)
 const LAT_RECENT = 34.0008; // cell 68002, ~89m from A (inside the 150m area)
 const ID_A = '68000,-234000';
 const ID_B = '68001,-234000';
+const ID_C = '68002,-234000';
 
 function locatedAsset(id: string, lat: number, creationTime: number) {
   return { id, lat, lng: -117.0, creationTime, mediaType: 'photo' };
@@ -221,32 +223,74 @@ describe('geofence enter handling', () => {
 
   it('goes silent at a routine place (home/work) after enough distinct days', async () => {
     enableNotifications();
-    setIndex([locatedAsset('a', LAT_A, OLD)]);
+    // Three distinct clusters within the 150m routine radius. Using distinct ids
+    // (not the same spot three times) keeps the per-cluster 90-day cooldown from
+    // shadowing the test — each day's enter is a different cluster, so the only
+    // thing that silences the third day is routine detection.
+    setIndex([
+      locatedAsset('a', LAT_A, OLD),
+      locatedAsset('b', LAT_B, OLD),
+      locatedAsset('c', LAT_C, OLD),
+    ]);
     const { enter } = loadManager();
     const base = Date.now();
     const nowSpy = jest.spyOn(Date, 'now');
 
-    // Visit the same spot on three distinct days. The 6h cooldown doesn't apply
-    // (days apart), so the only thing that can silence it is routine detection.
+    // Visit the same place (within 150m) on three distinct days. The location
+    // cooldown doesn't apply (days apart), so routine detection is what silences.
     nowSpy.mockReturnValue(base);
     await enter(ID_A);
     nowSpy.mockReturnValue(base + DAY);
-    await enter(ID_A);
+    await enter(ID_B);
     nowSpy.mockReturnValue(base + 2 * DAY); // third distinct day → routine
-    await enter(ID_A);
+    await enter(ID_C);
 
     // Notified on the first two days, then recognized as home/work and muted.
     expect(mockScheduleNotification).toHaveBeenCalledTimes(2);
     nowSpy.mockRestore();
   });
 
-  it('notifies a nearby cluster only once: cooldown covers the 150m radius', async () => {
+  it('does not re-notify the same cluster within 90 days', async () => {
+    enableNotifications();
+    setIndex([locatedAsset('a', LAT_A, OLD)]);
+    const { enter } = loadManager();
+    const base = Date.now();
+    const nowSpy = jest.spyOn(Date, 'now');
+
+    nowSpy.mockReturnValue(base);
+    await enter(ID_A);
+    // 30 days later: the location cooldown has long expired and two visits a
+    // month apart aren't routine, so only the per-cluster cooldown holds it back.
+    nowSpy.mockReturnValue(base + 30 * DAY);
+    await enter(ID_A);
+
+    expect(mockScheduleNotification).toHaveBeenCalledTimes(1);
+    nowSpy.mockRestore();
+  });
+
+  it('re-notifies the same cluster after the 90-day window', async () => {
+    enableNotifications();
+    setIndex([locatedAsset('a', LAT_A, OLD)]);
+    const { enter } = loadManager();
+    const base = Date.now();
+    const nowSpy = jest.spyOn(Date, 'now');
+
+    nowSpy.mockReturnValue(base);
+    await enter(ID_A);
+    nowSpy.mockReturnValue(base + 91 * DAY); // past the per-cluster window
+    await enter(ID_A);
+
+    expect(mockScheduleNotification).toHaveBeenCalledTimes(2);
+    nowSpy.mockRestore();
+  });
+
+  it('notifies a nearby cluster only once: location cooldown covers the radius', async () => {
     enableNotifications();
     setIndex([locatedAsset('a', LAT_A, OLD), locatedAsset('b', LAT_B, OLD)]);
     const { enter } = loadManager();
 
     await enter(ID_A);
-    await enter(ID_B); // ~55m away, same arrival
+    await enter(ID_B); // ~55m away, same arrival (inside the ~100m quiet zone)
 
     expect(mockScheduleNotification).toHaveBeenCalledTimes(1);
   });
@@ -310,8 +354,8 @@ describe('geofence registration', () => {
   it('widens enter regions in a sparse area to the ceiling', async () => {
     enableNotifications();
     // Two old clusters ~1km apart: a spread-out area, so each region widens to
-    // the 400m ceiling rather than the dense 120m floor — a far-flung memory
-    // still triggers.
+    // the 250m ceiling rather than the dense 120m floor — a far-flung memory
+    // still triggers, but capped well under the old quarter-mile reach.
     setIndex([locatedAsset('a', 34.0, OLD), locatedAsset('far', 34.009, OLD)]);
     const { mgr } = loadManager();
 
@@ -323,7 +367,7 @@ describe('geofence registration', () => {
     ];
     expect(regions).toHaveLength(2);
     for (const r of regions) {
-      expect(r.radius).toBe(400);
+      expect(r.radius).toBe(250);
     }
   });
 
@@ -507,7 +551,7 @@ describe('foreground fallback', () => {
     const { mgr } = loadManager();
     await mgr.startForegroundFallback();
 
-    // ~1.1km away — beyond even the widest (400m ceiling) adaptive radius.
+    // ~1.1km away — beyond even the widest (250m ceiling) adaptive radius.
     mockWatchCb!({ coords: { latitude: LAT_A + 0.01, longitude: -117.0 } });
     await flush();
 

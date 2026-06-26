@@ -130,12 +130,12 @@ describe('isAreaNotifiable', () => {
 
   it('widens the suppression neighborhood in a sparse area', () => {
     // The nearest OTHER places are ~800m+ away (genuinely spread out), so the
-    // neighborhood widens to the ceiling and a recent photo ~250m away now
+    // neighborhood widens to the 250m ceiling and a recent photo ~200m away now
     // suppresses the old spot — it would not under a fixed 150m radius.
     const oldSpot = cluster({ id: 'old', centerLat: 34.0 });
     const recent = cluster({
       id: 'recent',
-      centerLat: 34.0 + 2.5 * DEG_100M, // ~250m
+      centerLat: 34.0 + 2 * DEG_100M, // ~200m
       newestCreationTime: RECENT,
     });
     const far1 = cluster({ id: 'far1', centerLat: 34.0 + 8 * DEG_100M }); // ~800m, old

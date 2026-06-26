@@ -1,6 +1,7 @@
 import type { PhotoCluster } from '@/hooks/use-photo-clusters';
 import {
   clusterRelevanceRadius,
+  COOLDOWN_OPTS,
   NEARME_OPTS,
   relevanceRadiusFor,
   SUPPRESS_OPTS,
@@ -36,16 +37,16 @@ describe('relevanceRadiusFor', () => {
   });
 
   it('widens to the ceiling where clusters are spread out (a beach)', () => {
-    // 2nd-nearest ~1100m → 0.5*1100=550 → clamps down to the 400m ceiling.
-    expect(radiusAt([cl('a', at(1000)), cl('b', at(1100))])).toBe(400);
+    // 2nd-nearest ~1100m → 0.5*1100=550 → clamps down to the 250m ceiling.
+    expect(radiusAt([cl('a', at(1000)), cl('b', at(1100))])).toBe(250);
   });
 
   it('varies between floor and ceiling in the transition zone', () => {
-    // 2nd-nearest ~520m → 0.5*520 ≈ 260.
-    const r = radiusAt([cl('a', at(500)), cl('b', at(520))]);
+    // 2nd-nearest ~360m → 0.5*360 ≈ 180, between the 120m floor and 250m ceiling.
+    const r = radiusAt([cl('a', at(350)), cl('b', at(360))]);
     expect(r).toBeGreaterThan(TRIGGER_OPTS.floor);
     expect(r).toBeLessThan(TRIGGER_OPTS.ceiling);
-    expect(r).toBeCloseTo(260, 0);
+    expect(r).toBeCloseTo(180, 0);
   });
 
   it('uses the 2nd-nearest neighbor, ignoring a single stray close cell', () => {
@@ -54,18 +55,18 @@ describe('relevanceRadiusFor', () => {
     // (A 1st-nearest rule would collapse to the 120m floor here.)
     expect(
       radiusAt([cl('stray', at(55)), cl('f1', at(1000)), cl('f2', at(1100))])
-    ).toBe(400);
+    ).toBe(250);
   });
 
   it('returns the ceiling with no neighbors (a lone memory)', () => {
-    expect(radiusAt([])).toBe(400);
+    expect(radiusAt([])).toBe(250);
   });
 
   it('falls back to the only neighbor when fewer than k exist', () => {
     // A single close neighbor → dense → floor.
     expect(radiusAt([cl('a', at(55))])).toBe(120);
     // A single far neighbor → sparse → ceiling.
-    expect(radiusAt([cl('a', at(1000))])).toBe(400);
+    expect(radiusAt([cl('a', at(1000))])).toBe(250);
   });
 
   it('excludeId skips the cluster itself', () => {
@@ -74,7 +75,7 @@ describe('relevanceRadiusFor', () => {
     // Counting self (distance 0) makes the 2nd-nearest the 55m cell → dense → floor.
     expect(radiusAt(clusters)).toBe(120);
     // Excluding self, the 2nd-nearest is the 1100m cell → sparse → ceiling.
-    expect(clusterRelevanceRadius(self, clusters, TRIGGER_OPTS)).toBe(400);
+    expect(clusterRelevanceRadius(self, clusters, TRIGGER_OPTS)).toBe(250);
   });
 
   it('can tighten below the geofence floor for Near Me (in-app, not OS-limited)', () => {
@@ -91,7 +92,7 @@ describe('relevanceRadiusFor', () => {
   });
 
   it('exposes presets with a floor no greater than the ceiling', () => {
-    for (const opts of [TRIGGER_OPTS, SUPPRESS_OPTS, NEARME_OPTS]) {
+    for (const opts of [TRIGGER_OPTS, SUPPRESS_OPTS, COOLDOWN_OPTS, NEARME_OPTS]) {
       expect(opts.floor).toBeLessThanOrEqual(opts.ceiling);
       expect(opts.k).toBeGreaterThanOrEqual(1);
     }
