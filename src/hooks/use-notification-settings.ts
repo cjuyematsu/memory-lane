@@ -1,15 +1,20 @@
 import { useEffect, useState } from 'react';
 
 import { persistedFile, readPersisted } from '@/lib/persisted-file';
+import { PLACE_COOLDOWN_DEFAULT_MS } from '@/lib/place-cooldown';
 
 const FILE_NAME = 'notification-settings.json';
 
 export type NotificationSettings = {
   enabled: boolean;
+  // How long after a place reminds you before it may remind you there again.
+  // null = "Only once" (that place is silenced indefinitely). See place-cooldown.ts.
+  placeCooldownMs: number | null;
 };
 
 const DEFAULTS: NotificationSettings = {
   enabled: false,
+  placeCooldownMs: PLACE_COOLDOWN_DEFAULT_MS,
 };
 
 let cached: NotificationSettings | null = null;
@@ -56,6 +61,12 @@ function saveToDisk(settings: NotificationSettings): void {
 
 export function setNotificationsEnabled(enabled: boolean): void {
   cached = { ...(cached ?? DEFAULTS), enabled };
+  notify();
+  saveToDisk(cached);
+}
+
+export function setPlaceCooldownMs(placeCooldownMs: number | null): void {
+  cached = { ...(cached ?? DEFAULTS), placeCooldownMs };
   notify();
   saveToDisk(cached);
 }

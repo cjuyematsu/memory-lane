@@ -17,10 +17,15 @@ import * as Notifications from 'expo-notifications';
 import BellIcon from '@/assets/icons/bell.svg';
 import { SpectrumRule } from '@/components/brand/spectrum-rule';
 import { MockFeedCard, MockGrid } from '@/components/onboarding/mocks';
+import { CooldownPicker } from '@/components/notifications/cooldown-picker';
 import { Colors, DisplayFont, Ink, Paper, PhotoRatio } from '@/constants/theme';
 import { notifyLocationChanged } from '@/hooks/use-current-location';
 import { ensureMediaPermission } from '@/hooks/use-media-permission';
-import { setNotificationsEnabled } from '@/hooks/use-notification-settings';
+import {
+  setNotificationsEnabled,
+  setPlaceCooldownMs,
+  useNotificationSettings,
+} from '@/hooks/use-notification-settings';
 import {
   getOnboardingState,
   saveOnboardingProgress,
@@ -40,6 +45,7 @@ type StepKey =
   | 'location'
   | 'notifications'
   | 'background'
+  | 'remind'
   | 'done';
 const ORDER: StepKey[] = [
   'welcome',
@@ -48,6 +54,7 @@ const ORDER: StepKey[] = [
   'location',
   'notifications',
   'background',
+  'remind',
   'done',
 ];
 
@@ -59,6 +66,9 @@ type StepContent = {
   body: string;
   // The "never leaves your phone" reassurance, shown under permission CTAs.
   reassure?: boolean;
+  // An optional interactive element rendered under the body copy (e.g. the
+  // reminder-cadence picker). Most steps leave this undefined.
+  extra?: React.ReactNode;
   primaryLabel: string;
   onPrimary: () => void;
   secondaryLabel?: string;
@@ -118,6 +128,56 @@ function PinGlyph({ size }: { size: number }) {
   );
 }
 
+// A drawn clock for the reminder-cadence screen: a circle outline with an hour
+// and minute hand. Each hand is a center-anchored bar inside a square overlay
+// that's rotated about its own center (default RN rotate origin), so no
+// transform-origin gymnastics. Sized to sit inside the glyph circle.
+function ClockHand({ size, length, angle }: { size: number; length: number; angle: number }) {
+  const thickness = size * 0.075;
+  return (
+    <View
+      style={{
+        position: 'absolute',
+        width: size,
+        height: size,
+        alignItems: 'center',
+        transform: [{ rotate: `${angle}deg` }],
+      }}>
+      {/* A bar reaching from the clock's center upward; its height ends at center. */}
+      <View
+        style={{
+          width: thickness,
+          height: length,
+          backgroundColor: Ink,
+          borderRadius: thickness / 2,
+          marginTop: size / 2 - length,
+        }}
+      />
+    </View>
+  );
+}
+
+function ClockGlyph({ size }: { size: number }) {
+  return (
+    <View
+      style={{
+        width: size,
+        height: size,
+        borderRadius: size / 2,
+        borderWidth: size * 0.07,
+        borderColor: Ink,
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}>
+      <ClockHand size={size} length={size * 0.32} angle={0} />
+      <ClockHand size={size} length={size * 0.22} angle={110} />
+      <View
+        style={{ width: size * 0.13, height: size * 0.13, borderRadius: size * 0.065, backgroundColor: Ink }}
+      />
+    </View>
+  );
+}
+
 // A black outline ring that holds a single glyph, giving the concept steps
 // (privacy / notifications / background) a consistent container — present, but
 // distinct from the polaroid, which is reserved for welcome/done.
@@ -141,6 +201,7 @@ function GlyphCircle({ size, children }: { size: number; children: React.ReactNo
 export function OnboardingFlow() {
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
+  const settings = useNotificationSettings();
   // Resume where a previous (killed) run left off. The gate has already loaded
   // the persisted state by the time this mounts, so the cache is warm.
   const [step, setStep] = useState(() =>
@@ -154,12 +215,32 @@ export function OnboardingFlow() {
     saveOnboardingProgress(step);
   }, [step]);
 
-  const advance = useCallback(() => setStep((s) => s + 1), []);
-  const goTo = useCallback((k: StepKey) => setStep(ORDER.indexOf(k)), []);
-  // Linear back through the ordered steps; the header back button is hidden on
-  // the first step. Permission asks only fire on the primary button, so stepping
-  // back never re-prompts.
-  const goBack = useCallback(() => setStep((s) => Math.max(0, s - 1)), []);
+  // Remember the path actually taken, not just step-1, so Back returns to the
+  // screen the user really came from. Navigation isn't linear: declining
+  // notifications jumps straight to the end (skipping the background + reminder
+  // steps), and Back from there must land back on the notifications step, not on
+  // a step that was never shown. (Empty after a resume-from-kill → linear fallback.)
+  const [history, setHistory] = useState<number[]>([]);
+  const goToIndex = useCallback(
+    (next: number) => {
+      setHistory((h) => [...h, step]);
+      setStep(next);
+    },
+    [step]
+  );
+  const advance = useCallback(() => goToIndex(step + 1), [goToIndex, step]);
+  const goTo = useCallback((k: StepKey) => goToIndex(ORDER.indexOf(k)), [goToIndex]);
+  // Back pops the real history; the header back button is hidden on the first
+  // step. Permission asks only fire on the primary button, so stepping back
+  // never re-prompts.
+  const goBack = useCallback(() => {
+    if (history.length === 0) {
+      setStep((s) => Math.max(0, s - 1));
+      return;
+    }
+    setStep(history[history.length - 1]);
+    setHistory(history.slice(0, -1));
+  }, [history]);
 
   // Surface one OS prompt, then navigate. `next` runs even on denial/error, so a
   // declined permission still moves the flow forward (the in-app locked screens
@@ -334,6 +415,24 @@ export function OnboardingFlow() {
           secondaryLabel: 'Maybe later',
           onSecondary: advance,
         };
+      case 'remind':
+        return {
+          preview: (
+            <GlyphCircle size={circleD}>
+              <ClockGlyph size={glyphSize} />
+            </GlyphCircle>
+          ),
+          title: 'Remind me again',
+          body: 'When you return to a place, PastPic reminds you once, then waits before reminding you there again. Pick how long, or have each place remind you just once.',
+          extra: (
+            <CooldownPicker
+              value={settings.placeCooldownMs}
+              onChange={setPlaceCooldownMs}
+            />
+          ),
+          primaryLabel: 'Sounds good',
+          onPrimary: advance,
+        };
       case 'done':
       default:
         return {
@@ -381,6 +480,7 @@ export function OnboardingFlow() {
             {/* Always occupy the reassurance line's height so the title-to-button
                 distance is constant; the text only shows on permission steps. */}
             <Text style={styles.reassure}>{content.reassure ? PRIVACY_NOTE : ' '}</Text>
+            {content.extra ? <View style={styles.extra}>{content.extra}</View> : null}
           </View>
         </View>
 
@@ -482,6 +582,10 @@ const styles = StyleSheet.create({
   copy: {
     alignItems: 'center',
     gap: 12,
+  },
+  extra: {
+    marginTop: 4,
+    alignItems: 'center',
   },
   title: {
     fontFamily: DisplayFont,

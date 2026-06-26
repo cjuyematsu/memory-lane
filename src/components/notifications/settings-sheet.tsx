@@ -12,6 +12,7 @@ import {
   View,
 } from 'react-native';
 
+import { CooldownPicker } from '@/components/notifications/cooldown-picker';
 import { DisplayFont, Ink, Paper } from '@/constants/theme';
 import { diagnoseAndroidMetadata } from '@/lib/android-metadata-diagnostic';
 import {
@@ -21,6 +22,7 @@ import {
 } from '@/lib/geofence-manager';
 import {
   setNotificationsEnabled,
+  setPlaceCooldownMs,
   useNotificationSettings,
 } from '@/hooks/use-notification-settings';
 import { restartOnboarding } from '@/hooks/use-onboarding';
@@ -142,6 +144,24 @@ export function SettingsSheet({
               location and notification permissions)
             </Text>
           </View>
+
+          {/* Only relevant once notifications are on. */}
+          {settings.enabled ? (
+            <View style={styles.notifBlock}>
+              <View style={styles.row}>
+                <View style={styles.rowText}>
+                  <Text style={styles.rowLabel}>Remind me again</Text>
+                </View>
+                <CooldownPicker
+                  value={settings.placeCooldownMs}
+                  onChange={setPlaceCooldownMs}
+                />
+              </View>
+              <Text style={styles.rowSub}>
+                After a place reminds you, how long before it can notify you there again.
+              </Text>
+            </View>
+          ) : null}
 
           {degraded ? (
             <Pressable style={styles.warning} onPress={() => Linking.openSettings()}>

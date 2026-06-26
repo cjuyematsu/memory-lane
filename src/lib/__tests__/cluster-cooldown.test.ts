@@ -65,6 +65,39 @@ describe('cluster cooldown', () => {
     expect(Object.keys(store)).toEqual([ID_B]);
   });
 
+  it('honors a custom (shorter) window passed in', async () => {
+    await markClusterNotified(ID_A, NOW, 7 * DAY);
+    expect(await isClusterInCooldown(ID_A, NOW + 7 * DAY - 1, 7 * DAY)).toBe(true);
+    expect(await isClusterInCooldown(ID_A, NOW + 7 * DAY, 7 * DAY)).toBe(false);
+  });
+
+  it('silences indefinitely when the window is null ("Only once")', async () => {
+    await markClusterNotified(ID_A, NOW, null);
+    // Still spent a decade later — once it has fired it never re-notifies.
+    expect(await isClusterInCooldown(ID_A, NOW + 10 * 365 * DAY, null)).toBe(true);
+    // A place that never fired is not silenced.
+    expect(await isClusterInCooldown(ID_B, NOW, null)).toBe(false);
+  });
+
+  it('does not prune entries while the window is null', async () => {
+    await markClusterNotified(ID_A, NOW, null);
+    await markClusterNotified(ID_B, NOW + 1000 * DAY, null);
+    const store = JSON.parse(mockStore.get(FILE)!);
+    expect(Object.keys(store).sort()).toEqual([ID_A, ID_B].sort());
+  });
+
+  it('re-arms a place when switching off "Only once" to a finite window', async () => {
+    // Fired once while set to "Only once" (null): records only a timestamp, not
+    // a permanent lock. Stays silenced forever *while* the setting is "Only once".
+    await markClusterNotified(ID_A, NOW, null);
+    expect(await isClusterInCooldown(ID_A, NOW + 365 * DAY, null)).toBe(true);
+    // User changes the setting to "1 day". That same timestamp is now read
+    // against the 1-day window, so the next visit a day later re-notifies —
+    // the global policy applies retroactively, it isn't a sticky per-place flag.
+    expect(await isClusterInCooldown(ID_A, NOW + DAY - 1, DAY)).toBe(true); // <1 day: still quiet
+    expect(await isClusterInCooldown(ID_A, NOW + DAY, DAY)).toBe(false); // ≥1 day: fires again
+  });
+
   it('tolerates the legacy array (location-cooldown) format', async () => {
     mockStore.set(FILE, JSON.stringify([{ lat: 34, lng: -117, at: NOW }]));
     expect(await isClusterInCooldown(ID_A, NOW)).toBe(false);

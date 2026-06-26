@@ -117,8 +117,9 @@ async function handleClusterEnter(clusterId: string): Promise<void> {
   if (await isRoutineLocation(cluster.centerLat, cluster.centerLng)) return;
 
   // This exact place already surfaced its memory recently — the memory is
-  // "spent", so stay quiet for ~90 days even as you keep passing through.
-  if (await isClusterInCooldown(clusterId)) return;
+  // "spent", so stay quiet for the user's chosen window (default ~90 days, up to
+  // "Only once" = forever) even as you keep passing through.
+  if (await isClusterInCooldown(clusterId, undefined, settings.placeCooldownMs)) return;
 
   // Short spatial quiet zone: don't let a near-duplicate cluster double-ping on
   // the same arrival. The radius tracks local density too, so suppression and
@@ -145,7 +146,7 @@ async function handleClusterEnter(clusterId: string): Promise<void> {
     });
   }
   await markNotified(cluster.centerLat, cluster.centerLng);
-  await markClusterNotified(clusterId);
+  await markClusterNotified(clusterId, undefined, settings.placeCooldownMs);
 }
 
 // Dev-only: fire the same notification path on a short delay so the app can
@@ -246,6 +247,7 @@ export async function inspectRadiiHere(): Promise<{
   if (!clusters || clusters.length === 0) {
     return { ok: false, message: 'No located photos yet. Open Near Me once to build the index.' };
   }
+  const { placeCooldownMs } = await loadSettingsFromDisk();
   const pos = await Location.getCurrentPositionAsync({
     accuracy: Location.Accuracy.Balanced,
   });
@@ -268,8 +270,8 @@ export async function inspectRadiiHere(): Promise<{
       const cd = clusterRelevanceRadius(c, clusters, COOLDOWN_OPTS);
       if (await isRoutineLocation(c.centerLat, c.centerLng)) {
         status = `home/work (${await routineDayCount(c.centerLat, c.centerLng)} days)`;
-      } else if (await isClusterInCooldown(c.id)) {
-        status = 'spent (≤90d ago)';
+      } else if (await isClusterInCooldown(c.id, undefined, placeCooldownMs)) {
+        status = 'spent (cooldown)';
       } else if (await isInCooldown(c.centerLat, c.centerLng, undefined, cd)) {
         status = `cooldown (${Math.round(cd)}m)`;
       } else {

@@ -119,8 +119,13 @@ function setIndex(assets: ReturnType<typeof locatedAsset>[]) {
   mockIndex = { located: assets, unlocatedVideos: [], processedIds: [] };
 }
 
-function enableNotifications(enabled = true) {
-  mockStore.set('notification-settings.json', JSON.stringify({ enabled }));
+function enableNotifications(enabled = true, placeCooldownMs?: number | null) {
+  // Omitting placeCooldownMs leaves it off the persisted blob, so the settings
+  // module fills in its ~90-day default (matching real upgraders).
+  mockStore.set(
+    'notification-settings.json',
+    JSON.stringify(placeCooldownMs === undefined ? { enabled } : { enabled, placeCooldownMs })
+  );
 }
 
 type Manager = typeof import('@/lib/geofence-manager');
@@ -281,6 +286,40 @@ describe('geofence enter handling', () => {
     await enter(ID_A);
 
     expect(mockScheduleNotification).toHaveBeenCalledTimes(2);
+    nowSpy.mockRestore();
+  });
+
+  it('honors a shortened per-place window from settings', async () => {
+    enableNotifications(true, 7 * DAY); // user picked "1 week"
+    setIndex([locatedAsset('a', LAT_A, OLD)]);
+    const { enter } = loadManager();
+    const base = Date.now();
+    const nowSpy = jest.spyOn(Date, 'now');
+
+    nowSpy.mockReturnValue(base);
+    await enter(ID_A);
+    // 8 days later: still quiet under the 90-day default, but the user shortened
+    // it to a week, so the same place reminds again.
+    nowSpy.mockReturnValue(base + 8 * DAY);
+    await enter(ID_A);
+
+    expect(mockScheduleNotification).toHaveBeenCalledTimes(2);
+    nowSpy.mockRestore();
+  });
+
+  it('never re-notifies the same cluster when set to "Only once" (null)', async () => {
+    enableNotifications(true, null);
+    setIndex([locatedAsset('a', LAT_A, OLD)]);
+    const { enter } = loadManager();
+    const base = Date.now();
+    const nowSpy = jest.spyOn(Date, 'now');
+
+    nowSpy.mockReturnValue(base);
+    await enter(ID_A);
+    nowSpy.mockReturnValue(base + 400 * DAY); // over a year later
+    await enter(ID_A);
+
+    expect(mockScheduleNotification).toHaveBeenCalledTimes(1);
     nowSpy.mockRestore();
   });
 
