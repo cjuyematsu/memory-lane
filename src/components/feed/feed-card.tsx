@@ -27,6 +27,7 @@ export const FeedCard = memo(function FeedCard({
   asset,
   isCurrent,
   isActive = true,
+  priority = 'normal',
   width,
   height,
   frame,
@@ -35,6 +36,10 @@ export const FeedCard = memo(function FeedCard({
   asset: Asset;
   isCurrent: boolean;
   isActive?: boolean;
+  // Decode/download priority, driven by how close this card is to the one in
+  // view: the focused photo and its immediate neighbors outrank the rest so they
+  // win the iCloud download queue on an offloaded library.
+  priority?: 'low' | 'normal' | 'high';
   width: number;
   height: number;
   frame: FrameLayout;
@@ -122,6 +127,7 @@ export const FeedCard = memo(function FeedCard({
               style={StyleSheet.absoluteFill}
               contentFit={isLandscape ? 'contain' : 'cover'}
               cachePolicy={isCurrent ? 'memory-disk' : 'disk'}
+              priority={priority}
               transition={0}
               recyclingKey={asset.id}
               onLoad={(e) => {

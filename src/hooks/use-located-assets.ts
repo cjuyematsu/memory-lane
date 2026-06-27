@@ -12,7 +12,73 @@ import { persistedFile, readPersisted } from '@/lib/persisted-file';
 // new photo never forces a full re-scan.
 
 const INDEX_FILE = 'located-assets.json';
+// Concurrency for small / incremental syncs (a few new photos after the first
+// build) — kept modest since they overlap nothing.
 const HYDRATE_CONCURRENCY = 4;
+// The big first build is DEFERRED past the feed's first paint and shows visible
+// progress, so it can run wider to finish the one-time setup sooner. Metadata
+// reads go through a different native path than image downloads, so this doesn't
+// starve the feed. A tiny breather still yields a frame between batches.
+const LARGE_SWEEP_THRESHOLD = 200;
+const LARGE_SWEEP_CONCURRENCY = 8;
+const LARGE_SWEEP_DELAY_MS = 4;
+// Persist partial progress this often (in assets located) so closing the app
+// mid-build resumes from the last checkpoint instead of restarting from zero.
+// Each checkpoint is a synchronous JSON write, so this is a balance: small
+// enough to lose little work on a kill, large enough to keep writes infrequent
+// (~4 for a 10k library) so they don't hitch the feed during the background build.
+const CHECKPOINT_EVERY = 2000;
+
+export type LocatePacing = { concurrency: number; interBatchDelayMs: number };
+
+// Pure: how aggressively to run a sweep of `total` assets. Kept separate (and
+// exported) so the pacing decision is unit-testable without touching native reads.
+export function locatePacing(total: number): LocatePacing {
+  if (total > LARGE_SWEEP_THRESHOLD) {
+    return { concurrency: LARGE_SWEEP_CONCURRENCY, interBatchDelayMs: LARGE_SWEEP_DELAY_MS };
+  }
+  return { concurrency: HYDRATE_CONCURRENCY, interBatchDelayMs: 0 };
+}
+
+// --- First-build progress ----------------------------------------------------
+// Surfaced to the Near Me "Setting up" note so the one-time full sweep reads as
+// working (a live count), not a hung spinner. Plain module pub/sub (no React
+// here — this module is also imported by the headless geofence task).
+export type BuildProgress = { processed: number; total: number };
+let buildProgress: BuildProgress = { processed: 0, total: 0 };
+let lastProgressNotified = 0;
+const progressSubs = new Set<() => void>();
+
+export function getBuildProgress(): BuildProgress {
+  return buildProgress;
+}
+
+export function subscribeBuildProgress(cb: () => void): () => void {
+  progressSubs.add(cb);
+  return () => {
+    progressSubs.delete(cb);
+  };
+}
+
+// Pure: throttle so a 10k sweep emits ~50 updates (every `step`, plus the first
+// and last), not thousands — a smooth count without re-render churn.
+export function shouldNotifyProgress(
+  processed: number,
+  total: number,
+  lastNotified: number,
+  step: number
+): boolean {
+  return processed === 0 || processed >= total || processed - lastNotified >= step;
+}
+
+const PROGRESS_NOTIFY_STEP = 200;
+function setBuildProgress(processed: number, total: number): void {
+  buildProgress = { processed, total };
+  if (shouldNotifyProgress(processed, total, lastProgressNotified, PROGRESS_NOTIFY_STEP)) {
+    lastProgressNotified = processed;
+    for (const fn of progressSubs) fn();
+  }
+}
 
 export type LocatedAsset = {
   id: string;
@@ -71,7 +137,7 @@ function saveToDisk(index: AssetIndex): void {
   }
 }
 
-type LocateResult =
+export type LocateResult =
   | { kind: 'located'; value: LocatedAsset }
   | { kind: 'unlocatedVideo'; value: UnlocatedVideo }
   | { kind: 'none' };
@@ -107,55 +173,115 @@ async function locate(asset: Asset): Promise<LocateResult> {
   }
 }
 
-async function locateAll(assets: Asset[]): Promise<LocateResult[]> {
+// Pure: fold a batch of locate results for `processedAssets` onto a kept base
+// (the entries carried over from a prior index), producing a complete AssetIndex
+// shape. Used both for the running checkpoint and the final result, and exported
+// so the assembly is unit-testable.
+export function assembleIndex(
+  kept: AssetIndex,
+  processedAssets: Asset[],
+  results: LocateResult[]
+): AssetIndex {
+  const located = [...kept.located];
+  const unlocatedVideos = [...kept.unlocatedVideos];
+  const processedIds = [...kept.processedIds];
+  results.forEach((r, j) => {
+    processedIds.push(processedAssets[j].id);
+    if (r.kind === 'located') located.push(r.value);
+    else if (r.kind === 'unlocatedVideo') unlocatedVideos.push(r.value);
+  });
+  return { located, unlocatedVideos, processedIds };
+}
+
+export type LocateSweepDeps = {
+  locate: (asset: Asset) => Promise<LocateResult>;
+  pacing: LocatePacing;
+  checkpointEvery: number;
+  // Fired after each batch with the accumulated results so far; the caller can
+  // persist a partial index. Not fired on the final batch (the caller saves the
+  // complete result itself).
+  onCheckpoint?: (results: LocateResult[]) => void;
+  // Fired after each batch with how many of `assets` are done.
+  onProgress?: (processed: number, total: number) => void;
+};
+
+// Locate `assets` in paced batches, checkpointing periodically. Dependency-
+// injected (locate/pacing/callbacks) so the batching + checkpoint cadence is
+// unit-testable without native reads or timers.
+export async function runLocateSweep(
+  assets: Asset[],
+  deps: LocateSweepDeps
+): Promise<LocateResult[]> {
+  const { locate: locateFn, pacing, checkpointEvery, onCheckpoint, onProgress } = deps;
+  const { concurrency, interBatchDelayMs } = pacing;
+  const total = assets.length;
   const out: LocateResult[] = [];
-  for (let i = 0; i < assets.length; i += HYDRATE_CONCURRENCY) {
-    const batch = assets.slice(i, i + HYDRATE_CONCURRENCY);
-    const results = await Promise.all(batch.map(locate));
+  let sinceCheckpoint = 0;
+  for (let i = 0; i < assets.length; i += concurrency) {
+    const batch = assets.slice(i, i + concurrency);
+    const results = await Promise.all(batch.map(locateFn));
     out.push(...results);
-    // Yield between batches so the bulk metadata load doesn't block the JS
-    // thread / starve other MediaLibrary consumers.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    onProgress?.(out.length, total);
+    sinceCheckpoint += batch.length;
+    // Don't checkpoint the final batch — the caller persists the complete result.
+    if (sinceCheckpoint >= checkpointEvery && out.length < total) {
+      sinceCheckpoint = 0;
+      onCheckpoint?.(out);
+    }
+    if (interBatchDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, interBatchDelayMs));
+    }
   }
   return out;
 }
 
-// Reconcile the existing index to the current asset list: locate only assets
-// we haven't processed before, and drop entries for assets that no longer
-// exist. Returns the same object reference when nothing changed.
+const EMPTY_INDEX: AssetIndex = { located: [], unlocatedVideos: [], processedIds: [] };
+
+// Reconcile the existing index to the current asset list: locate only assets we
+// haven't processed before, drop entries for assets that no longer exist, and
+// checkpoint partial progress to disk so an interrupted build resumes. Returns
+// the same object reference when nothing changed.
 async function sync(base: AssetIndex | null, assets: Asset[]): Promise<AssetIndex> {
-  if (!base) {
-    const results = await locateAll(assets);
-    const located: LocatedAsset[] = [];
-    const unlocatedVideos: UnlocatedVideo[] = [];
-    for (const r of results) {
-      if (r.kind === 'located') located.push(r.value);
-      else if (r.kind === 'unlocatedVideo') unlocatedVideos.push(r.value);
-    }
-    return { located, unlocatedVideos, processedIds: assets.map((a) => a.id) };
-  }
-
   const currentIds = new Set(assets.map((a) => a.id));
-  const processed = new Set(base.processedIds);
+  const processed = new Set(base?.processedIds ?? []);
   const toAdd = assets.filter((a) => !processed.has(a.id));
-  const hasRemovals = base.processedIds.some((id) => !currentIds.has(id));
+  const hasRemovals = base ? base.processedIds.some((id) => !currentIds.has(id)) : false;
 
-  if (toAdd.length === 0 && !hasRemovals) return base;
+  if (base && toAdd.length === 0 && !hasRemovals) return base;
 
-  const located = base.located.filter((l) => currentIds.has(l.id));
-  const unlocatedVideos = base.unlocatedVideos.filter((v) => currentIds.has(v.id));
-  const processedIds = base.processedIds.filter((id) => currentIds.has(id));
+  // Carry over the still-present entries from the prior index (empty on a first
+  // build); the sweep appends the newly-located ones onto this.
+  const kept: AssetIndex = base
+    ? {
+        located: base.located.filter((l) => currentIds.has(l.id)),
+        unlocatedVideos: base.unlocatedVideos.filter((v) => currentIds.has(v.id)),
+        processedIds: base.processedIds.filter((id) => currentIds.has(id)),
+      }
+    : EMPTY_INDEX;
 
-  if (toAdd.length > 0) {
-    const results = await locateAll(toAdd);
-    for (const r of results) {
-      if (r.kind === 'located') located.push(r.value);
-      else if (r.kind === 'unlocatedVideo') unlocatedVideos.push(r.value);
-    }
-    for (const a of toAdd) processedIds.push(a.id);
+  if (toAdd.length === 0) {
+    // Only removals to apply — no locating needed.
+    return { ...kept };
   }
 
-  return { located, unlocatedVideos, processedIds };
+  // Show progress over the WHOLE library (kept + this sweep) so a resume reads
+  // "6,200 of 9,800", not a count that restarts. Only when the work is large.
+  const libraryTotal = assets.length;
+  const baseDone = kept.processedIds.length;
+  const report = toAdd.length > LARGE_SWEEP_THRESHOLD;
+  if (report) setBuildProgress(baseDone, libraryTotal);
+
+  const results = await runLocateSweep(toAdd, {
+    locate,
+    pacing: locatePacing(toAdd.length),
+    checkpointEvery: CHECKPOINT_EVERY,
+    onCheckpoint: (partial) =>
+      saveToDisk(assembleIndex(kept, toAdd.slice(0, partial.length), partial)),
+    onProgress: report ? (done) => setBuildProgress(baseDone + done, libraryTotal) : undefined,
+  });
+
+  if (report) setBuildProgress(libraryTotal, libraryTotal);
+  return assembleIndex(kept, toAdd, results);
 }
 
 export async function ensureIndex(assets: Asset[]): Promise<AssetIndex> {

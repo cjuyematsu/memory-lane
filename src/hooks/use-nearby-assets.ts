@@ -10,6 +10,7 @@ import {
   type AssetIndex,
 } from '@/hooks/use-located-assets';
 import { getClusters } from '@/hooks/use-photo-clusters';
+import { hasFirstPainted, whenFirstPaint } from '@/lib/first-paint';
 import { NEARME_OPTS, relevanceRadiusFor } from '@/lib/relevance-radius';
 import { distanceMeters } from '@/utils/distance';
 
@@ -24,6 +25,10 @@ import { distanceMeters } from '@/utils/distance';
 // if Near Me feels too broad or too narrow.
 export const NEAR_ME_RADIUS_METERS = 150;
 const ESTIMATE_WINDOW_MS = 30 * 60 * 1000;
+// Fallback cap on how long the first cold index build waits for the feed's
+// first paint. The feed normally paints in well under this; the cap just keeps
+// an empty/stuck library from blocking the build forever.
+const COLD_BUILD_DEFER_MS = 4000;
 
 export type NearbyAsset = {
   asset: Asset;
@@ -231,13 +236,27 @@ export function useNearbyAssets(assets: Asset[] | null, origin: Origin): NearbyS
       building = true;
       notify();
     }
-    ensureIndex(assets)
-      .catch(() => {})
-      .finally(() => {
-        if (cancelled) return;
-        building = false;
-        notify();
-      });
+    const run = () => {
+      if (cancelled) return;
+      ensureIndex(assets)
+        .catch(() => {})
+        .finally(() => {
+          if (cancelled) return;
+          building = false;
+          notify();
+        });
+    };
+    // First cold build (no index on disk yet): hold the bulk metadata sweep until
+    // the Camera Roll has painted its first photo (or a fallback timeout), so it
+    // never competes with that first paint. The onboarding prewarm and warm /
+    // incremental syncs already have an index (or one in-flight), so they run
+    // immediately. Both Near Me consumers (the greeter + the tab) gate the same
+    // way; ensureIndex dedupes the actual work.
+    if (!hadIndex && !hasFirstPainted()) {
+      whenFirstPaint(COLD_BUILD_DEFER_MS).then(run);
+    } else {
+      run();
+    }
     return () => {
       cancelled = true;
     };

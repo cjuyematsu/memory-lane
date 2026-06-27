@@ -8,6 +8,7 @@ import { LoadingPolaroid } from '@/components/brand/loading-polaroid';
 import { frameTop } from '@/components/feed/photo-frame';
 import { ClusterView } from '@/components/near-me/cluster-view';
 import { Grid } from '@/components/near-me/grid';
+import { SetupNote } from '@/components/near-me/setup-note';
 import { Viewer } from '@/components/near-me/viewer';
 import { SettingsSheet } from '@/components/notifications/settings-sheet';
 import { DisplayFont, FrameMargin, Ink, Paper } from '@/constants/theme';
@@ -33,6 +34,11 @@ const SETTLE_MS = 600;
 // same library), so without a floor the tap would read as a no-op; this
 // guarantees the search feels like it actually ran.
 const BUSY_MIN_MS = 1200;
+// How long Near Me can sit on the loading spinner before we surface the
+// "Setting up" note. Short enough that a genuinely slow first build (large /
+// iCloud-offloaded library) explains itself, long enough that fast/warm launches
+// never flash it.
+const SLOW_NOTE_DELAY_MS = 2000;
 
 export function NearMe({
   isActive = true,
@@ -82,6 +88,10 @@ export function NearMe({
   // index that the geofence notifications read stays current; we freeze only
   // what's displayed.
   const [displayItems, setDisplayItems] = useState<NearbyAsset[] | null>(null);
+  // After a beat on the loading spinner with no snapshot yet, reveal the
+  // "Setting up Near Me" note (the slow first build is the only thing that keeps
+  // us here this long).
+  const [showSlowNote, setShowSlowNote] = useState(false);
   // `accepting` opens a short window (after a trigger) during which we adopt each
   // freshly-settled `items` into the snapshot; outside it the grid is frozen.
   const [accepting, setAccepting] = useState(false);
@@ -145,6 +155,17 @@ export function NearMe({
     });
     return () => sub.remove();
   }, [arm, refreshLocation]);
+
+  // Reveal the setup note only after the spinner has lingered (= a slow first
+  // build); never flash it on fast loads. `displayItems` only ever goes
+  // null -> array (a snapshot is never cleared back to null), so once we have one
+  // the early-return cancels the timer and the note unmounts with the spinner —
+  // no reset-to-false needed (which would trip react-hooks/set-state-in-effect).
+  useEffect(() => {
+    if (displayItems !== null) return;
+    const t = setTimeout(() => setShowSlowNote(true), SLOW_NOTE_DELAY_MS);
+    return () => clearTimeout(t);
+  }, [displayItems]);
 
   // Clear any pending timers on unmount.
   useEffect(() => {
@@ -348,7 +369,7 @@ export function NearMe({
         )}
       </SafeAreaView>
     ) : (
-      <LoadingPolaroid />
+      <LoadingPolaroid note={showSlowNote ? <SetupNote /> : undefined} />
     );
   })();
 

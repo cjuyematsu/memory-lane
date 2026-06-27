@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { ActivityIndicator, Image, StyleSheet, View } from 'react-native';
 
 import { Paper } from '@/constants/theme';
@@ -22,7 +23,7 @@ const SPINNER_OFFSET_Y = (0.408 - 0.5) * HEIGHT;
 // (no fade-in) — so it never reads as "polaroid first, then a spinner pops in."
 // The whole thing is identical to the native splash plus the spinner, so the
 // splash → in-app hand-off is seamless.
-export function LoadingPolaroid() {
+export function LoadingPolaroid({ note }: { note?: ReactNode } = {}) {
   return (
     <View style={styles.center}>
       <View style={styles.frame}>
@@ -31,6 +32,7 @@ export function LoadingPolaroid() {
           <ActivityIndicator color={Paper} />
         </View>
       </View>
+      {note ? <View style={styles.note}>{note}</View> : null}
     </View>
   );
 }
@@ -54,5 +56,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     transform: [{ translateY: SPINNER_OFFSET_Y }],
+  },
+  // Sits just below the polaroid; the frame + note center together as a column.
+  note: {
+    marginTop: 28,
+    alignItems: 'center',
   },
 });

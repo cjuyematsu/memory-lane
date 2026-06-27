@@ -38,6 +38,8 @@ import {
 } from '@/hooks/use-asset-metadata';
 import { useMediaPermission } from '@/hooks/use-media-permission';
 import { prefetchReverseGeocode } from '@/hooks/use-reverse-geocode';
+import { cardLoadPriority } from '@/lib/feed-priority';
+import { markFirstPaint } from '@/lib/first-paint';
 import { requestShare } from '@/lib/share-memory';
 
 let rememberedAssetId: string | null = null;
@@ -100,6 +102,7 @@ function OverlayFramedPhoto({
   uri,
   frame,
   onReady,
+  priority = 'normal',
 }: {
   uri: string;
   frame: FrameLayout;
@@ -107,6 +110,10 @@ function OverlayFramedPhoto({
   // proceed either way, but warm/download callers must not treat a failed
   // photo as cached.
   onReady?: (ok: boolean) => void;
+  // Visible overlays (splash, crossfade) load at high priority; the hidden
+  // warm-layer / old-memory decodes run at 'low' so they never outrank the
+  // photo the user is actually looking at.
+  priority?: 'low' | 'normal' | 'high';
 }) {
   const [isLandscape, setIsLandscape] = useState(false);
   return (
@@ -116,6 +123,7 @@ function OverlayFramedPhoto({
         style={StyleSheet.absoluteFill}
         contentFit={isLandscape ? 'contain' : 'cover'}
         cachePolicy="memory-disk"
+        priority={priority}
         transition={0}
         onLoad={(e) => {
           const { width: w, height: h } = e.source ?? {};
@@ -156,6 +164,10 @@ export function Feed({
   const [outgoingAssetId, setOutgoingAssetId] = useState<string | null>(null);
   const [overlayPainted, setOverlayPainted] = useState(false);
   const [splashLatched, setSplashLatched] = useState(true);
+  // Flips true the first time a card actually paints. Gates the hidden warm
+  // layer + old-memory downloads so they don't pile onto the Photos framework
+  // while the very first photo is still loading (worst on an offloaded library).
+  const [hasPaintedFirst, setHasPaintedFirst] = useState(false);
   // Disables the feed's own vertical paging while a card is being pinch-zoomed
   // (and reports it up via onZoomChange so TopTabs can disable tab-swiping too).
   const [zooming, setZooming] = useState(false);
@@ -223,6 +235,10 @@ export function Feed({
   const cardEvents = useMemo<FeedCardEvents>(
     () => ({
       onCardReady: (assetId: string) => {
+        // First real photo on screen: release the deferred cold index build
+        // (use-nearby-assets waits on this) and the warm-layer gate below.
+        markFirstPaint();
+        setHasPaintedFirst(true);
         cardReadyHandlerRef.current(assetId);
         setSplashLatched(false);
         // The shuffle gate listens here directly (not via the fade handler,
@@ -259,6 +275,13 @@ export function Feed({
   const assets = useMemo(
     () => (state.status === 'ready' ? state.assets : NO_ASSETS),
     [state]
+  );
+
+  // Index of the card in view, so renderItem can score each card's load
+  // priority by its distance from it (current = high, ±2 = normal, rest = low).
+  const currentIndex = useMemo(
+    () => (currentId ? assets.findIndex((a) => a.id === currentId) : -1),
+    [assets, currentId]
   );
 
   // Async (one in flight at a time): each candidate is checked against
@@ -350,6 +373,9 @@ export function Feed({
   // transition re-runs this, giving a natural pacing tied to actual use.
   useEffect(() => {
     if (!rememberLastPosition || !isActive || entryIndex === null) return;
+    // Hold background old-memory downloads until the first photo has painted, so
+    // they don't compete with it for the network/decoder on cold start.
+    if (!hasPaintedFirst) return;
     if (transitionActive || outgoingAssetId || downloadingOldId) return;
     if (oldMemoriesDownloaded >= OLD_MEMORY_SESSION_CAP) return;
     if (oldMemoryTries >= OLD_MEMORY_TRY_CAP) return;
@@ -368,6 +394,7 @@ export function Feed({
     transitionActive,
     outgoingAssetId,
     downloadingOldId,
+    hasPaintedFirst,
     pickOldCloudCandidate,
   ]);
 
@@ -393,7 +420,9 @@ export function Feed({
         if (rememberLastPosition) rememberedAssetId = chosen.id;
         warmAssetMetadata(chosen);
         prefetchAround(idx);
-        refillShuffleQueue(chosen.id);
+        // Warm-layer refill is deferred until the entry card paints (see the
+        // hasPaintedFirst-gated effect below), so the queue's hidden decodes
+        // don't compete with the very first photo's load.
       };
       if (startAssetId) {
         const idx = assets.findIndex((a) => a.id === startAssetId);
@@ -435,7 +464,6 @@ export function Feed({
     entryIndex,
     assets,
     prefetchAround,
-    refillShuffleQueue,
     startAssetId,
     rememberLastPosition,
   ]);
@@ -445,11 +473,16 @@ export function Feed({
   }, [currentId, rememberLastPosition]);
 
   // Safety net: if no card ever signals ready (e.g., the entry asset got
-  // deleted), drop the splash latch after a couple seconds so the user
-  // isn't stuck staring at a stale image.
+  // deleted, or a stuck iCloud download), drop the splash latch after a couple
+  // seconds so the user isn't stuck staring at a stale image — and release the
+  // warm-layer gate too, so shuffle still warms up even when the first photo
+  // never reports painted.
   useEffect(() => {
     if (state.status !== 'ready' || entryIndex === null) return;
-    const t = setTimeout(() => setSplashLatched(false), 2500);
+    const t = setTimeout(() => {
+      setSplashLatched(false);
+      setHasPaintedFirst(true);
+    }, 2500);
     return () => clearTimeout(t);
   }, [state.status, entryIndex]);
 
@@ -458,8 +491,10 @@ export function Feed({
   // but never while a crossfade is in flight, so the warm layer's decodes
   // can't compete with the destination photo's own load.
   useEffect(() => {
-    if (isActive && !outgoingAssetId && !transitionActive) refillShuffleQueue();
-  }, [isActive, outgoingAssetId, transitionActive, refillShuffleQueue]);
+    if (isActive && hasPaintedFirst && !outgoingAssetId && !transitionActive) {
+      refillShuffleQueue();
+    }
+  }, [isActive, hasPaintedFirst, outgoingAssetId, transitionActive, refillShuffleQueue]);
 
   const shuffle = useCallback(() => {
     if (assets.length === 0) return;
@@ -680,7 +715,7 @@ export function Feed({
       }}>
       {splash && splashLatched && (isLoading || isReady) ? (
         <View style={StyleSheet.absoluteFill} pointerEvents="none">
-          <OverlayFramedPhoto uri={splash.uri} frame={frame} />
+          <OverlayFramedPhoto uri={splash.uri} frame={frame} priority="high" />
         </View>
       ) : null}
 
@@ -721,11 +756,12 @@ export function Feed({
                 style={StyleSheet.absoluteFill}
                 data={assets}
                 keyExtractor={(item) => item.id}
-                renderItem={({ item }) => (
+                renderItem={({ item, index }) => (
                   <FeedCard
                     asset={item}
                     isCurrent={item.id === currentId}
                     isActive={isActive}
+                    priority={cardLoadPriority(index, currentIndex)}
                     width={layout.width}
                     height={layout.height}
                     frame={frame}
@@ -759,6 +795,7 @@ export function Feed({
           <OverlayFramedPhoto
             uri={outgoingAssetId}
             frame={frame}
+            priority="high"
             onReady={() => setOverlayPainted(true)}
           />
         </Animated.View>
@@ -775,6 +812,7 @@ export function Feed({
               key={id}
               uri={id}
               frame={frame}
+              priority="low"
               onReady={(ok) => {
                 if (ok) warmLoadedRef.current.add(id);
               }}
@@ -785,6 +823,7 @@ export function Feed({
               key={`old-${downloadingOldId}`}
               uri={downloadingOldId}
               frame={frame}
+              priority="low"
               onReady={(ok) => {
                 if (ok) {
                   oldMemoryPool.push(downloadingOldId);

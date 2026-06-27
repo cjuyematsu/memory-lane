@@ -149,6 +149,14 @@ async function runReload(): Promise<Asset[]> {
   return inflightReload;
 }
 
+// Imperative one-shot loader for non-React callers (e.g. the onboarding
+// prewarm): loads the asset list once, deduped through the same module
+// inflight/cached path the hook uses, without mounting a hook. Resolves to the
+// loaded library.
+export function ensureAssetsLoaded(): Promise<Asset[]> {
+  return runReload();
+}
+
 export function useAssetFeed(enabled: boolean) {
   const [state, setState] = useState<FeedState>(() =>
     cachedAssets

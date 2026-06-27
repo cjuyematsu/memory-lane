@@ -19,7 +19,9 @@ import { SpectrumRule } from '@/components/brand/spectrum-rule';
 import { MockFeedCard, MockGrid } from '@/components/onboarding/mocks';
 import { CooldownPicker } from '@/components/notifications/cooldown-picker';
 import { Colors, DisplayFont, Ink, Paper, PhotoRatio } from '@/constants/theme';
+import { ensureAssetsLoaded } from '@/hooks/use-asset-feed';
 import { notifyLocationChanged } from '@/hooks/use-current-location';
+import { ensureIndex } from '@/hooks/use-located-assets';
 import { ensureMediaPermission } from '@/hooks/use-media-permission';
 import {
   setNotificationsEnabled,
@@ -198,6 +200,20 @@ function GlyphCircle({ size, children }: { size: number; children: React.ReactNo
   );
 }
 
+// Front-load the expensive located-assets index during onboarding's dead time.
+// The moment photos are granted we kick off the one native metadata sweep while
+// the user keeps tapping through the remaining steps — nothing else is competing
+// for the Photos framework yet, and the result persists to disk, so the main app
+// mounts to a ready (or already-in-progress, deduped) index instead of starting
+// it cold under the feed. Fire-and-forget and metadata-only: it never requests
+// location or renders a photo, so it can't surface the OS location prompt
+// mid-onboarding (which a live Near Me would).
+function prewarmLocatedIndex() {
+  ensureAssetsLoaded()
+    .then((assets) => ensureIndex(assets))
+    .catch(() => {});
+}
+
 export function OnboardingFlow() {
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
@@ -265,7 +281,13 @@ export function OnboardingFlow() {
   );
 
   const askPhotos = useCallback(
-    () => runAsk(async () => void (await ensureMediaPermission()), advance),
+    () =>
+      runAsk(async () => {
+        const res = await ensureMediaPermission();
+        // Start building the located index now (dead time) only if we can
+        // actually read photos; otherwise there's nothing to sweep.
+        if (res.granted) prewarmLocatedIndex();
+      }, advance),
     [runAsk, advance]
   );
   const askLocation = useCallback(
