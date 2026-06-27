@@ -27,7 +27,12 @@ import ShuffleIcon from '@/assets/icons/shuffle.svg';
 import { LoadingPolaroid } from '@/components/brand/loading-polaroid';
 import { FeedCard } from '@/components/feed/feed-card';
 import { FeedCardEventsContext, type FeedCardEvents } from '@/components/feed/feed-context';
-import { PhotoFrame, frameLayout, type FrameLayout } from '@/components/feed/photo-frame';
+import {
+  FEED_BOTTOM_RESERVE,
+  PhotoFrame,
+  frameLayout,
+  type FrameLayout,
+} from '@/components/feed/photo-frame';
 import { DisplayFont, Ink, Paper } from '@/constants/theme';
 import { useAssetFeed } from '@/hooks/use-asset-feed';
 import {
@@ -39,6 +44,7 @@ import {
 import { useMediaPermission } from '@/hooks/use-media-permission';
 import { prefetchReverseGeocode } from '@/hooks/use-reverse-geocode';
 import { entryCandidateOrder } from '@/lib/feed-entry';
+import { getWarmedEntryId } from '@/lib/feed-entry-warm';
 import { cardLoadPriority } from '@/lib/feed-priority';
 import { markFirstPaint } from '@/lib/first-paint';
 import { requestShare } from '@/lib/share-memory';
@@ -71,11 +77,6 @@ const TRANSITION_RELEASE_CAP_MS = 4000;
 const NO_ASSETS: Asset[] = [];
 // Module-level so FlatList sees a stable viewabilityConfig identity.
 const VIEWABILITY_CONFIG = { itemVisiblePercentThreshold: 60 };
-// Vertical space below the frame for the caption + shuffle button (+ safe-area
-// inset, added separately). The frame is sized to leave this much room, so on
-// phones it stays the full-width box and on iPad it shrinks to keep the caption
-// and shuffle on screen.
-const FEED_BOTTOM_RESERVE = 130;
 
 // Metadata only — deliberately no Image.prefetch. For ph:// (and content://)
 // photo-library URIs, prefetch decodes the FULL-resolution asset (expo-image's
@@ -125,7 +126,10 @@ function OverlayFramedPhoto({
         contentFit={isLandscape ? 'contain' : 'cover'}
         cachePolicy="memory-disk"
         priority={priority}
-        transition={0}
+        // Cross-dissolve like the live card so the shuffle-exit / splash overlay
+        // fades between image states instead of hard-cutting — and any
+        // opportunistic low-res frame fades up rather than flashing on exit.
+        transition={200}
         onLoad={(e) => {
           const { width: w, height: h } = e.source ?? {};
           if (w && h) setIsLandscape(w > h);
@@ -437,6 +441,19 @@ export function Feed({
         if (idx >= 0) {
           commit(idx);
           return;
+        }
+      }
+      // Onboarding warmed an on-device entry (and the warm host pre-decoded it at
+      // this exact frame size): open on it so the very first photo is a cache hit
+      // — same "random on-device memory" UX as the probe below, just instant.
+      if (rememberLastPosition) {
+        const warmedId = getWarmedEntryId();
+        if (warmedId) {
+          const idx = assets.findIndex((a) => a.id === warmedId);
+          if (idx >= 0) {
+            commit(idx);
+            return;
+          }
         }
       }
       // Random entry: probe candidates for one that's on device, so a fresh

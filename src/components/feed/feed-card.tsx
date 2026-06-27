@@ -144,7 +144,14 @@ export const FeedCard = memo(function FeedCard({
               contentFit={isLandscape ? 'contain' : 'cover'}
               cachePolicy={isCurrent ? 'memory-disk' : 'disk'}
               priority={priority}
-              transition={0}
+              // Cross-dissolve every image update. With the opportunistic
+              // PHImageManager delivery (expo-image patch) an offloaded photo
+              // arrives first as a fast low-res frame (blurred by the patch) then
+              // the full image — fading between them keeps that swap from reading
+              // as a flash. ImageView.renderSourceImage wraps each setImage in a
+              // UIView.transition only when this duration is > 0. Do NOT set it
+              // back to 0 to "speed things up": that reintroduces the hard pop.
+              transition={200}
               recyclingKey={asset.id}
               onLoad={(e) => {
                 const { width: w, height: h } = e.source ?? {};

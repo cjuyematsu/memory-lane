@@ -19,10 +19,15 @@ import { SpectrumRule } from '@/components/brand/spectrum-rule';
 import { MockFeedCard, MockGrid } from '@/components/onboarding/mocks';
 import { CooldownPicker } from '@/components/notifications/cooldown-picker';
 import { Colors, DisplayFont, Ink, Paper, PhotoRatio } from '@/constants/theme';
+import { Asset } from 'expo-media-library';
+
 import { ensureAssetsLoaded } from '@/hooks/use-asset-feed';
+import { loadAssetIsInCloud } from '@/hooks/use-asset-metadata';
 import { notifyLocationChanged } from '@/hooks/use-current-location';
 import { ensureIndex } from '@/hooks/use-located-assets';
 import { ensureMediaPermission } from '@/hooks/use-media-permission';
+import { entryCandidateOrder } from '@/lib/feed-entry';
+import { setWarmedEntryId } from '@/lib/feed-entry-warm';
 import {
   setNotificationsEnabled,
   setPlaceCooldownMs,
@@ -200,17 +205,44 @@ function GlyphCircle({ size, children }: { size: number; children: React.ReactNo
   );
 }
 
-// Front-load the expensive located-assets index during onboarding's dead time.
-// The moment photos are granted we kick off the one native metadata sweep while
-// the user keeps tapping through the remaining steps — nothing else is competing
-// for the Photos framework yet, and the result persists to disk, so the main app
-// mounts to a ready (or already-in-progress, deduped) index instead of starting
-// it cold under the feed. Fire-and-forget and metadata-only: it never requests
-// location or renders a photo, so it can't surface the OS location prompt
-// mid-onboarding (which a live Near Me would).
-function prewarmLocatedIndex() {
+// Pick the photo the Camera Roll will open on, using the SAME on-device probe
+// the feed's entry effect uses (entryCandidateOrder + iCloud check), and stash
+// its id so the feed adopts exactly it and the warm host (feed-entry-warm-host)
+// can pre-decode it. Probing the same way guarantees we warm the photo the user
+// will actually see; iCloud checks are cheap, cached metadata reads.
+async function pickWarmedEntry(assets: Asset[]): Promise<void> {
+  if (assets.length === 0) return;
+  for (const idx of entryCandidateOrder(assets.length)) {
+    try {
+      if (!(await loadAssetIsInCloud(assets[idx]))) {
+        setWarmedEntryId(assets[idx].id);
+        return;
+      }
+    } catch {
+      // keep probing — a failed iCloud read just isn't a usable candidate
+    }
+  }
+  // Heavily-offloaded library: fall back to the newest photo (most likely local),
+  // matching the feed's own fallback.
+  setWarmedEntryId(assets[0].id);
+}
+
+// Front-load the expensive work during onboarding's dead time. The moment photos
+// are granted we (1) pick + warm the Camera Roll's entry photo so the app opens
+// straight onto a real photo with no loading beat, then (2) kick off the one
+// native located-index sweep while the user keeps tapping through the remaining
+// steps — nothing else is competing for the Photos framework yet, and the result
+// persists to disk, so the main app mounts to a ready (or already-in-progress,
+// deduped) index instead of starting it cold under the feed. Fire-and-forget and
+// metadata-only: it never requests location, so it can't surface the OS location
+// prompt mid-onboarding (which a live Near Me would). The only render it triggers
+// is the warm host's off-screen photo decode — no location, no visible UI.
+function prewarmFeedEntryAndIndex() {
   ensureAssetsLoaded()
-    .then((assets) => ensureIndex(assets))
+    .then(async (assets) => {
+      await pickWarmedEntry(assets);
+      return ensureIndex(assets);
+    })
     .catch(() => {});
 }
 
@@ -284,9 +316,9 @@ export function OnboardingFlow() {
     () =>
       runAsk(async () => {
         const res = await ensureMediaPermission();
-        // Start building the located index now (dead time) only if we can
-        // actually read photos; otherwise there's nothing to sweep.
-        if (res.granted) prewarmLocatedIndex();
+        // Warm the entry photo + build the located index now (dead time) only if
+        // we can actually read photos; otherwise there's nothing to sweep.
+        if (res.granted) prewarmFeedEntryAndIndex();
       }, advance),
     [runAsk, advance]
   );

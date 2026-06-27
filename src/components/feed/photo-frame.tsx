@@ -27,6 +27,15 @@ export function frameHeight(screenW: number): number {
 
 export type FrameLayout = { top: number; left: number; width: number; height: number };
 
+// Vertical space below the frame for the caption + shuffle button (+ safe-area
+// inset, added separately). The frame is sized to leave this much room, so on
+// phones it stays the full-width box and on iPad it shrinks to keep the caption
+// and shuffle on screen. Lives here (next to frameLayout) as the single source of
+// truth: the feed AND the off-screen entry-warm host (feed-entry-warm-host.tsx)
+// both size their frame from it, and a mismatch would silently miss the warmed
+// photo's size-keyed cache entry.
+export const FEED_BOTTOM_RESERVE = 130;
+
 // The framed-photo geometry: the largest 3:4 box that fits the screen width and
 // the vertical space left below the header after reserving `bottomReserve` for
 // the caption and any controls, centered horizontally. On phones this resolves

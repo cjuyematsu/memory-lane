@@ -19,14 +19,22 @@ index cccedd7..bef5d6e 100644
        return
      }
 diff --git a/node_modules/expo-image/ios/Loaders/PhotoLibraryAssetLoader.swift b/node_modules/expo-image/ios/Loaders/PhotoLibraryAssetLoader.swift
-index a3c15e7..967034b 100644
+index a3c15e7..f08376e 100644
 --- a/node_modules/expo-image/ios/Loaders/PhotoLibraryAssetLoader.swift
 +++ b/node_modules/expo-image/ios/Loaders/PhotoLibraryAssetLoader.swift
-@@ -94,7 +94,13 @@ private func requestAsset(
+@@ -1,5 +1,6 @@
+ import Photos
+ import Dispatch
++import CoreImage
+ internal import SDWebImage
+ import ExpoModulesCore
+ 
+@@ -94,8 +95,18 @@ private func requestAsset(
    let options = PHImageRequestOptions()
    options.isSynchronous = false
    options.version = .current
 -  options.deliveryMode = .highQualityFormat
+-  options.resizeMode = .fast
 +  // PastPic patch: .opportunistic (was .highQualityFormat) so PHImageManager
 +  // delivers a fast, locally-cached thumbnail first (resultHandler called with
 +  // a degraded image) and then the full-quality image once downloaded. For an
@@ -34,6 +42,57 @@ index a3c15e7..967034b 100644
 +  // of spinning for the entire download. Paired with the ImageView patch that
 +  // renders the intermediate (non-finished) image.
 +  options.deliveryMode = .opportunistic
-   options.resizeMode = .fast
++  // PastPic patch: .exact (was .fast) so the fast low-res thumbnail is scaled to
++  // the target size with smooth interpolation — it reads as a soft blur that
++  // sharpens, instead of the blocky/pixelated upscale .fast produced. Removes the
++  // "pixel flash" while keeping the instant-appear behavior.
++  options.resizeMode = .exact
    options.normalizedCropRect = .zero
    options.isNetworkAccessAllowed = true
+ 
+@@ -130,11 +141,44 @@ private func requestAsset(
+       // This value can be `true` only when network access is allowed and the photo is stored in the iCloud.
+       let isDegraded: Bool = info?[PHImageResultIsDegradedKey] as? Bool ?? false
+ 
+-      completedBlock?(image, nil, nil, !isDegraded)
++      // PastPic patch: for an iCloud-offloaded photo, PHImageManager (opportunistic
++      // delivery) hands back a small low-res placeholder first, then the full image.
++      // Blur that placeholder so it reads as a clean, intentional soft preview
++      // (blurhash-style) instead of a blocky/pixelated upscale; the full image
++      // (non-degraded) is shown sharp. Paired with the ImageView patch that renders
++      // this intermediate image.
++      let delivered = isDegraded ? image.map(blurredPlaceholder) : image
++
++      completedBlock?(delivered, nil, nil, !isDegraded)
+     }
+   )
+ }
+ 
++// A shared Core Image context for blurring placeholders, created once and reused.
++private let placeholderBlurContext = CIContext(options: [.useSoftwareRenderer: false])
++
++// PastPic patch: blur a low-resolution placeholder so it reads as a soft,
++// intentional preview rather than a blocky/pixelated upscale. The radius scales
++// with the image so it looks consistent regardless of the placeholder's size.
++// Any failure falls back to the original image (no blur), never to nil.
++private func blurredPlaceholder(_ image: UIImage) -> UIImage {
++  guard let cgImage = image.cgImage,
++    let filter = CIFilter(name: "CIGaussianBlur") else {
++    return image
++  }
++  let ciImage = CIImage(cgImage: cgImage)
++  // Clamp before blurring so the edges don't fade to transparent, then crop back
++  // to the original extent.
++  filter.setValue(ciImage.clampedToExtent(), forKey: kCIInputImageKey)
++  let minDimension = min(ciImage.extent.width, ciImage.extent.height)
++  filter.setValue(max(2.0, minDimension * 0.02), forKey: kCIInputRadiusKey)
++  guard let output = filter.outputImage,
++    let blurred = placeholderBlurContext.createCGImage(output, from: ciImage.extent) else {
++    return image
++  }
++  return UIImage(cgImage: blurred, scale: image.scale, orientation: image.imageOrientation)
++}
++
+ /**
+  Loader operation specialized for the Photo Library by keeping the request identifier.
+  */

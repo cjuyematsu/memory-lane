@@ -20,6 +20,7 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import { LoadingPolaroid } from '@/components/brand/loading-polaroid';
+import { FeedEntryWarmHost } from '@/components/feed/feed-entry-warm-host';
 import { MemoryBanner } from '@/components/notifications/memory-banner';
 import { NearbyMemoriesGreeter } from '@/components/notifications/nearby-memories-greeter';
 import { NotificationOrchestrator } from '@/components/notifications/notification-orchestrator';
@@ -106,6 +107,10 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: Paper }}>
       <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
         <NotificationOrchestrator />
+        {/* Off-screen, decodes the photo the onboarding prewarm picked for the
+            Camera Roll's first card, so the feed opens on a warm cache hit.
+            Renderless on every normal launch (nothing warmed). */}
+        <FeedEntryWarmHost />
         {/* Greeter touches location and can pop a banner — keep it out of the
             tree until onboarding is done, alongside the app. */}
         {onboarding === 'done' ? <NearbyMemoriesGreeter /> : null}
