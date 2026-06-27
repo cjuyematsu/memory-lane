@@ -22,6 +22,9 @@ const PLACE_TIMEOUT_MS = 1500;
 // Hard cap so a card can never stay invisible (= a white screen) if its image
 // somehow reports neither load nor error.
 const CARD_VISIBLE_TIMEOUT_MS = 1500;
+// After this long still loading, surface "Loading from iCloud…" under the
+// spinner so a slow offloaded-photo download reads as working, not frozen.
+const ICLOUD_HINT_DELAY_MS = 2500;
 
 export const FeedCard = memo(function FeedCard({
   asset,
@@ -61,6 +64,11 @@ export const FeedCard = memo(function FeedCard({
   const placeTimedOut = timedOutId === asset.id;
   const [imageReady, setImageReady] = useState(false);
   const [safetyVisible, setSafetyVisible] = useState(false);
+  // Keyed by asset id (like timedOutId) so a recycled card resets without a
+  // setState in the effect body. True once a still-loading card has waited long
+  // enough that it's clearly an iCloud download.
+  const [slowLoadId, setSlowLoadId] = useState<string | null>(null);
+  const slowLoad = slowLoadId === asset.id && !imageReady;
   // Landscape photos are letterboxed (contain) on #000; everything else fills
   // the 3:4 frame (cover). Determined from the decode since Asset has no dims.
   const [isLandscape, setIsLandscape] = useState(false);
@@ -87,6 +95,14 @@ export const FeedCard = memo(function FeedCard({
     const t = setTimeout(() => setSafetyVisible(true), CARD_VISIBLE_TIMEOUT_MS);
     return () => clearTimeout(t);
   }, [imageReady]);
+
+  // If a card is still loading after a beat, it's almost certainly downloading
+  // from iCloud — surface that under the spinner so it doesn't read as frozen.
+  useEffect(() => {
+    if (imageReady) return;
+    const t = setTimeout(() => setSlowLoadId(asset.id), ICLOUD_HINT_DELAY_MS);
+    return () => clearTimeout(t);
+  }, [imageReady, asset.id]);
 
   const opacity = useSharedValue(0);
   const opacityStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
@@ -146,6 +162,7 @@ export const FeedCard = memo(function FeedCard({
           {!imageReady ? (
             <View style={styles.loading} pointerEvents="none">
               <ActivityIndicator color={Paper} />
+              {slowLoad ? <Text style={styles.loadingText}>Loading from iCloud…</Text> : null}
             </View>
           ) : null}
         </PinchZoom>
@@ -237,6 +254,14 @@ const styles = StyleSheet.create({
     bottom: 0,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  loadingText: {
+    marginTop: 14,
+    fontFamily: DisplayFont,
+    color: Paper,
+    fontSize: 12,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
   },
   caption: {
     position: 'absolute',

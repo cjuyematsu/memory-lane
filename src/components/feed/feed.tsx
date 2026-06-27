@@ -38,6 +38,7 @@ import {
 } from '@/hooks/use-asset-metadata';
 import { useMediaPermission } from '@/hooks/use-media-permission';
 import { prefetchReverseGeocode } from '@/hooks/use-reverse-geocode';
+import { entryCandidateOrder } from '@/lib/feed-entry';
 import { cardLoadPriority } from '@/lib/feed-priority';
 import { markFirstPaint } from '@/lib/first-paint';
 import { requestShare } from '@/lib/share-memory';
@@ -438,14 +439,14 @@ export function Feed({
           return;
         }
       }
-      // Random entry: scan a few candidates for one that's on device, so a
-      // fresh launch doesn't open on an iCloud download spinner. The first
-      // roll is the fallback if every candidate needs the network.
+      // Random entry: probe candidates for one that's on device, so a fresh
+      // launch doesn't open on an iCloud download spinner. entryCandidateOrder
+      // tries a random sample first (keeps the "random memory" feel) then the
+      // newest photos (most likely kept on-device under Optimize Storage).
       let cancelled = false;
       (async () => {
-        const fallbackIdx = Math.floor(Math.random() * assets.length);
-        for (let i = 0; i < 8; i++) {
-          const idx = i === 0 ? fallbackIdx : Math.floor(Math.random() * assets.length);
+        const order = entryCandidateOrder(assets.length);
+        for (const idx of order) {
           const inCloud = await loadAssetIsInCloud(assets[idx]);
           if (cancelled) return;
           if (!inCloud) {
@@ -453,7 +454,10 @@ export function Feed({
             return;
           }
         }
-        commit(fallbackIdx);
+        // Whole sample was iCloud-resident (heavily offloaded library): open on
+        // the newest photo and let the in-card "Loading from iCloud" state
+        // explain the wait while it downloads.
+        commit(0);
       })();
       return () => {
         cancelled = true;

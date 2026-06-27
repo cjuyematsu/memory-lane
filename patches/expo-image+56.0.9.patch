@@ -1,0 +1,39 @@
+diff --git a/node_modules/expo-image/ios/ImageView.swift b/node_modules/expo-image/ios/ImageView.swift
+index cccedd7..bef5d6e 100644
+--- a/node_modules/expo-image/ios/ImageView.swift
++++ b/node_modules/expo-image/ios/ImageView.swift
+@@ -253,7 +253,14 @@ public final class ImageView: ExpoView {
+       }
+       return
+     }
+-    guard finished else {
++    // PastPic patch: don't drop intermediate (non-finished) images. With
++    // .opportunistic PHImageManager delivery (see PhotoLibraryAssetLoader) an
++    // offloaded iCloud photo arrives first as a fast low-res thumbnail
++    // (finished=false) then the full image (finished=true). Rendering the
++    // intermediate makes the photo appear immediately instead of spinning for the
++    // whole download; the full image replaces it via the same path. Only bail
++    // when there's no image at all (a genuine cancellation).
++    guard finished || image != nil else {
+       log.debug("Loading the image has been canceled")
+       return
+     }
+diff --git a/node_modules/expo-image/ios/Loaders/PhotoLibraryAssetLoader.swift b/node_modules/expo-image/ios/Loaders/PhotoLibraryAssetLoader.swift
+index a3c15e7..967034b 100644
+--- a/node_modules/expo-image/ios/Loaders/PhotoLibraryAssetLoader.swift
++++ b/node_modules/expo-image/ios/Loaders/PhotoLibraryAssetLoader.swift
+@@ -94,7 +94,13 @@ private func requestAsset(
+   let options = PHImageRequestOptions()
+   options.isSynchronous = false
+   options.version = .current
+-  options.deliveryMode = .highQualityFormat
++  // PastPic patch: .opportunistic (was .highQualityFormat) so PHImageManager
++  // delivers a fast, locally-cached thumbnail first (resultHandler called with
++  // a degraded image) and then the full-quality image once downloaded. For an
++  // iCloud-offloaded library this means a photo shows almost instantly instead
++  // of spinning for the entire download. Paired with the ImageView patch that
++  // renders the intermediate (non-finished) image.
++  options.deliveryMode = .opportunistic
+   options.resizeMode = .fast
+   options.normalizedCropRect = .zero
+   options.isNetworkAccessAllowed = true
