@@ -1,5 +1,5 @@
 diff --git a/node_modules/expo-image/ios/ImageView.swift b/node_modules/expo-image/ios/ImageView.swift
-index cccedd7..bef5d6e 100644
+index cccedd7..13311e8 100644
 --- a/node_modules/expo-image/ios/ImageView.swift
 +++ b/node_modules/expo-image/ios/ImageView.swift
 @@ -253,7 +253,14 @@ public final class ImageView: ExpoView {
@@ -18,6 +18,23 @@ index cccedd7..bef5d6e 100644
        log.debug("Loading the image has been canceled")
        return
      }
+@@ -509,7 +516,15 @@ public final class ImageView: ExpoView {
+     // For SF Symbol replace effect, skip the UIView transition and let the native symbol animation handle it
+     let isSFReplaceEffect = transition?.effect.isSFReplaceEffect == true && isSFSymbolSource
+ 
+-    if let transition = transition, transition.duration > 0, !isSFReplaceEffect {
++    // PastPic patch: only run the cross-dissolve when REPLACING an already-shown
++    // image (sdImageView.image != nil). With the .opportunistic delivery a photo
++    // arrives as a fast soft-blurred frame then the sharp full image: animating
++    // the replacement gives a gentle blur→sharp focus-in, while the FIRST frame
++    // is always set instantly. That's what keeps the transition from ever fading
++    // a photo up over the black PhotoFrame background (the "flash"/black-fade) and
++    // from animating the initial contentFit — the dissolve only ever blends two
++    // versions of the same already-placed image, so it can't flash or zoom.
++    if let transition = transition, transition.duration > 0, !isSFReplaceEffect, sdImageView.image != nil {
+       let options = transition.toAnimationOptions()
+       let seconds = transition.duration / 1000
+ 
 diff --git a/node_modules/expo-image/ios/Loaders/PhotoLibraryAssetLoader.swift b/node_modules/expo-image/ios/Loaders/PhotoLibraryAssetLoader.swift
 index a3c15e7..f08376e 100644
 --- a/node_modules/expo-image/ios/Loaders/PhotoLibraryAssetLoader.swift

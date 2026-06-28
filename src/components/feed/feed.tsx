@@ -43,6 +43,7 @@ import {
 } from '@/hooks/use-asset-metadata';
 import { useMediaPermission } from '@/hooks/use-media-permission';
 import { prefetchReverseGeocode } from '@/hooks/use-reverse-geocode';
+import { getAssetRatio, setAssetRatio } from '@/lib/asset-ratio-cache';
 import { entryCandidateOrder } from '@/lib/feed-entry';
 import { getWarmedEntryId } from '@/lib/feed-entry-warm';
 import { cardLoadPriority } from '@/lib/feed-priority';
@@ -117,7 +118,14 @@ function OverlayFramedPhoto({
   // photo the user is actually looking at.
   priority?: 'low' | 'normal' | 'high';
 }) {
-  const [isLandscape, setIsLandscape] = useState(false);
+  // Seed orientation from the shared ratio cache so the OUTGOING shuffle photo
+  // (just shown by the live card, which records its ratio on load) opens in the
+  // right fit immediately. Without this the overlay started `cover` and corrected
+  // to `contain` for a landscape photo — the visible zoom on shuffle.
+  const cachedRatio = getAssetRatio(uri);
+  const [loadedLandscapeUri, setLoadedLandscapeUri] = useState<string | null>(null);
+  const isLandscape =
+    loadedLandscapeUri === uri || (cachedRatio !== undefined && cachedRatio > 1);
   return (
     <PhotoFrame top={frame.top} left={frame.left} width={frame.width} height={frame.height}>
       <Image
@@ -126,13 +134,18 @@ function OverlayFramedPhoto({
         contentFit={isLandscape ? 'contain' : 'cover'}
         cachePolicy="memory-disk"
         priority={priority}
-        // Cross-dissolve like the live card so the shuffle-exit / splash overlay
-        // fades between image states instead of hard-cutting — and any
-        // opportunistic low-res frame fades up rather than flashing on exit.
-        transition={200}
+        // Instant: the overlay shows an already-on-screen photo (a cache hit), so
+        // it must appear at once. A `transition` here faded it in over the black
+        // frame, which (with the cover→contain correction) read as the shuffle
+        // zoom. The crossfade OUT to the new photo is the wrapping fadeOpacity,
+        // not this prop.
+        transition={0}
         onLoad={(e) => {
           const { width: w, height: h } = e.source ?? {};
-          if (w && h) setIsLandscape(w > h);
+          if (w && h) {
+            setAssetRatio(uri, w / h);
+            if (w > h) setLoadedLandscapeUri(uri);
+          }
           onReady?.(true);
         }}
         onError={() => onReady?.(false)}

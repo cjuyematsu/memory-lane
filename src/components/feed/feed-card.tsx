@@ -16,6 +16,7 @@ import { PinchZoom } from '@/components/pinch-zoom';
 import { DisplayFont, FrameMargin, Ink, Paper } from '@/constants/theme';
 import { useAssetMetadata, usePlaybackUri } from '@/hooks/use-asset-metadata';
 import { useReverseGeocode } from '@/hooks/use-reverse-geocode';
+import { getAssetRatio, setAssetRatio } from '@/lib/asset-ratio-cache';
 import { formatTimeAgo } from '@/utils/time-ago';
 
 const PLACE_TIMEOUT_MS = 1500;
@@ -70,8 +71,16 @@ export const FeedCard = memo(function FeedCard({
   const [slowLoadId, setSlowLoadId] = useState<string | null>(null);
   const slowLoad = slowLoadId === asset.id && !imageReady;
   // Landscape photos are letterboxed (contain) on #000; everything else fills
-  // the 3:4 frame (cover). Determined from the decode since Asset has no dims.
-  const [isLandscape, setIsLandscape] = useState(false);
+  // the 3:4 frame (cover). The Asset has no dims, so we SEED orientation from the
+  // shared ratio cache (populated as photos load here + in the Near Me grid) — a
+  // previously-seen photo opens in the right fit immediately instead of flashing
+  // a zoomed `cover` frame before its own decode corrects it (the shuffle zoom).
+  // Falls back to this card's own onLoad for a never-before-seen photo. Keyed by
+  // asset id (like timedOutId) so a recycled card re-derives without an effect.
+  const cachedRatio = getAssetRatio(asset.id);
+  const [loadedLandscapeId, setLoadedLandscapeId] = useState<string | null>(null);
+  const isLandscape =
+    loadedLandscapeId === asset.id || (cachedRatio !== undefined && cachedRatio > 1);
 
   useEffect(() => {
     if (!meta?.location || placeName) return;
@@ -144,18 +153,22 @@ export const FeedCard = memo(function FeedCard({
               contentFit={isLandscape ? 'contain' : 'cover'}
               cachePolicy={isCurrent ? 'memory-disk' : 'disk'}
               priority={priority}
-              // Cross-dissolve every image update. With the opportunistic
-              // PHImageManager delivery (expo-image patch) an offloaded photo
-              // arrives first as a fast low-res frame (blurred by the patch) then
-              // the full image — fading between them keeps that swap from reading
-              // as a flash. ImageView.renderSourceImage wraps each setImage in a
-              // UIView.transition only when this duration is > 0. Do NOT set it
-              // back to 0 to "speed things up": that reintroduces the hard pop.
-              transition={200}
+              // Gentle blur→sharp focus-in. The expo-image patch makes this
+              // transition run ONLY when replacing an already-shown frame (the
+              // sharp full image over the soft-blurred opportunistic one), never on
+              // first display — so it can't fade over the black frame or animate
+              // the contentFit, the two things that caused the earlier flash/zoom.
+              // The first frame still appears instantly.
+              transition={220}
               recyclingKey={asset.id}
               onLoad={(e) => {
                 const { width: w, height: h } = e.source ?? {};
-                if (w && h) setIsLandscape(w > h);
+                if (w && h) {
+                  // Record the ratio so the shuffle-exit overlay (and later views)
+                  // can seed the right fit and never flash a zoom.
+                  setAssetRatio(asset.id, w / h);
+                  if (w > h) setLoadedLandscapeId(asset.id);
+                }
                 setImageReady(true);
               }}
               onError={() => setImageReady(true)}
