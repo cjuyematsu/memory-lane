@@ -18,6 +18,7 @@ import { diagnoseAndroidMetadata } from '@/lib/android-metadata-diagnostic';
 import {
   fireTestNotification,
   inspectRadiiHere,
+  previewForegroundBanner,
   triggerNearestMemoryHere,
 } from '@/lib/geofence-manager';
 import {
@@ -188,6 +189,18 @@ export function SettingsSheet({
 
           {__DEV__ ? (
             <View style={styles.devRow}>
+              <Pressable
+                style={styles.devButton}
+                onPress={async () => {
+                  // Close first so the root-level banner isn't hidden behind this
+                  // modal; the async location read gives the modal time to dismiss
+                  // before the banner animates in.
+                  onClose();
+                  const res = await previewForegroundBanner();
+                  if (!res.ok) Alert.alert('Could not preview', res.message);
+                }}>
+                <Text style={styles.devButtonLabel}>Preview memory banner (foreground)</Text>
+              </Pressable>
               <Pressable
                 style={styles.devButton}
                 onPress={async () => {

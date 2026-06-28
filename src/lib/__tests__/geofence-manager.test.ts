@@ -193,9 +193,11 @@ describe('geofence enter handling', () => {
 
     await enter(ID_A);
 
+    // Foreground banner now carries the Near Me-style count (everything within
+    // the adaptive Near Me radius around the place) and the 'nearby' shape that
+    // taps to the Near Me grid — both assets sit in this one cell, so 2.
     expect(mockShowBanner).toHaveBeenCalledWith({
-      kind: 'cluster',
-      clusterId: ID_A,
+      kind: 'nearby',
       count: 2,
     });
     expect(mockScheduleNotification).not.toHaveBeenCalled();
@@ -572,8 +574,7 @@ describe('foreground fallback', () => {
     mockWatchCb!({ coords: { latitude: LAT_A, longitude: -117.0 } });
     await flush();
     expect(mockShowBanner).toHaveBeenCalledWith({
-      kind: 'cluster',
-      clusterId: ID_A,
+      kind: 'nearby',
       count: 1,
     });
 

@@ -17,6 +17,8 @@ import {
   nearestNotifiableClusters,
   type PhotoCluster,
 } from '@/hooks/use-photo-clusters';
+import { getIndex } from '@/hooks/use-located-assets';
+import { nearbyCount } from '@/hooks/use-nearby-assets';
 import {
   isClusterInCooldown,
   markClusterNotified,
@@ -131,7 +133,21 @@ async function handleClusterEnter(clusterId: string): Promise<void> {
 
   if (AppState.currentState === 'active') {
     // Foreground: show the in-app banner instead of a system notification.
-    showBanner({ kind: 'cluster', clusterId, count: cluster.assetIds.length });
+    // Count the same way Near Me does (everything within the adaptive Near Me
+    // radius around this place), not just this one ~50m cell, so the banner's
+    // number matches the grid the tap lands you on. Origin is the cluster center
+    // ("where the memory is"); the index is the shared spine Near Me reads, so
+    // when it's built the counts line up. Fall back to the cell count on the
+    // rare cold-launch where the index isn't ready yet.
+    const index = getIndex();
+    const count = index
+      ? nearbyCount(
+          index,
+          { latitude: cluster.centerLat, longitude: cluster.centerLng },
+          relevanceRadiusFor(cluster.centerLat, cluster.centerLng, clusters, NEARME_OPTS)
+        )
+      : cluster.assetIds.length;
+    showBanner({ kind: 'nearby', count });
   } else {
     await ensureAndroidChannel();
     await Notifications.scheduleNotificationAsync({
@@ -286,6 +302,38 @@ export async function inspectRadiiHere(): Promise<{
     message:
       `Near Me radius: ${nearMe}m\n${clusters.length} places total\n\n` +
       `Nearest places:\n${lines.join('\n')}`,
+  };
+}
+
+// Dev-only: fire the in-app foreground banner immediately, bypassing every gate
+// (area/routine/cooldown) so it can be previewed at home — where a real enter is
+// suppressed because home has recent photos and is a routine place. Mirrors the
+// foreground branch of handleClusterEnter exactly: the same nearby count (from
+// the shared index at your current spot, NEARME_OPTS radius) and the same
+// 'nearby' banner that taps to the refreshed Near Me grid (no cluster view).
+export async function previewForegroundBanner(): Promise<{
+  ok: boolean;
+  message: string;
+}> {
+  const perm = await Location.getForegroundPermissionsAsync();
+  if (perm.status !== 'granted') {
+    return { ok: false, message: 'Location permission is needed to preview the banner here.' };
+  }
+  const index = getIndex();
+  if (!index) {
+    return { ok: false, message: 'No located photos yet. Open Near Me once to build the index.' };
+  }
+  const clusters = getClusters() ?? (await loadClustersFromDisk()) ?? [];
+  const pos =
+    (await Location.getLastKnownPositionAsync()) ??
+    (await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }));
+  const { latitude, longitude } = pos.coords;
+  const radiusM = relevanceRadiusFor(latitude, longitude, clusters, NEARME_OPTS);
+  const count = nearbyCount(index, { latitude, longitude }, radiusM);
+  showBanner({ kind: 'nearby', count });
+  return {
+    ok: true,
+    message: `Banner fired: ${count} ${count === 1 ? 'memory' : 'memories'} near you. Tap it to refresh Near Me.`,
   };
 }
 

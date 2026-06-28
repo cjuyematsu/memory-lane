@@ -13,7 +13,6 @@ import BellIcon from '@/assets/icons/bell.svg';
 import { Colors, DisplayFont, Ink, Paper } from '@/constants/theme';
 import { clearBanner, useBanner } from '@/lib/foreground-banner';
 import { requestNearMe } from '@/lib/near-me-request';
-import { setPendingCluster } from '@/lib/pending-cluster';
 
 const VISIBLE_MS = 5000;
 // Smooth, slightly slower than a snap: a long ease-out settle on the way in and
@@ -66,34 +65,16 @@ export function MemoryBanner() {
 
   if (!banner) return null;
 
-  // Two banner shapes share this one host (so they can never stack):
-  // - 'cluster': one place the user entered. `count` is how many photos are
-  //   there, so label the place as a single memory and put the photo count in
-  //   the subtitle (saying "N memories" read as N separate places).
-  // - 'nearby': the app-open greeting. Here `count` IS the number of nearby
-  //   memories, so it's the headline.
-  let title: string;
-  let sub: string;
-  let onPress: () => void;
-  if (banner.kind === 'cluster') {
-    const clusterId = banner.clusterId;
-    title = 'Memory nearby';
-    sub =
-      banner.count === 1
-        ? 'Tap to see 1 photo from here'
-        : `Tap to see ${banner.count} photos from here`;
-    onPress = () => {
-      setPendingCluster(clusterId);
-      clearBanner();
-    };
-  } else {
-    title = `${banner.count} ${banner.count === 1 ? 'memory' : 'memories'} near you`;
-    sub = 'Tap to look back';
-    onPress = () => {
-      requestNearMe();
-      clearBanner();
-    };
-  }
+  // "N memories near you" — `count` is the number of nearby memories (the same
+  // count Near Me shows). Driven by both the app-open greeter and a foreground
+  // geofence enter; the tap opens the Near Me grid (which refreshes via
+  // requestNearMe), never a single place's cluster view.
+  const title = `${banner.count} ${banner.count === 1 ? 'memory' : 'memories'} near you`;
+  const sub = 'Tap to look back';
+  const onPress = () => {
+    requestNearMe();
+    clearBanner();
+  };
 
   return (
     <Animated.View style={[styles.wrap, style]} pointerEvents="box-none">

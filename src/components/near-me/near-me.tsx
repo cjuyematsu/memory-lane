@@ -12,6 +12,7 @@ import { SetupNote } from '@/components/near-me/setup-note';
 import { Viewer } from '@/components/near-me/viewer';
 import { SettingsSheet } from '@/components/notifications/settings-sheet';
 import { DisplayFont, FrameMargin, Ink, Paper } from '@/constants/theme';
+import { subscribeNearMeRequest } from '@/lib/near-me-request';
 import { setPendingCluster, usePendingCluster } from '@/lib/pending-cluster';
 import { useAssetFeed } from '@/hooks/use-asset-feed';
 import { useCurrentLocation } from '@/hooks/use-current-location';
@@ -191,6 +192,13 @@ export function NearMe({
     refreshNearby();
     void reloadFeed();
   }, [arm, refreshLocation, reloadFeed]);
+
+  // A banner tap (the foreground memory banner or the app-open greeter) routes
+  // here via requestNearMe — TopTabs switches to this tab, and we refresh so the
+  // grid recomputes at the current location rather than landing on a stale,
+  // frozen snapshot. NearMe is always mounted in the pager, so this fires even
+  // when Near Me isn't the active tab.
+  useEffect(() => subscribeNearMeRequest(onUserRefresh), [onUserRefresh]);
 
   // What the grid/viewer actually render: the frozen snapshot (or a stable empty
   // array until the first seed).

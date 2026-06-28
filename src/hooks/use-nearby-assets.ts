@@ -190,6 +190,47 @@ export function computeNearby(
   return { photos, videos };
 }
 
+// Count nearby photos + videos exactly as computeNearby would (located items
+// within radius, plus GPS-less videos estimated onto the nearest in-time photo
+// anchor), but straight off the shared index — no MediaLibrary Asset[] needed.
+// Lets the geofence manager show the same number Near Me will, from the index
+// alone. computeNearby additionally drops index entries missing from the current
+// `assets` list (for rendering); the index is kept in sync with the feed, so
+// skipping that membership check here doesn't change the count in practice.
+export function nearbyCount(
+  index: AssetIndex,
+  origin: { latitude: number; longitude: number },
+  radiusM: number = NEAR_ME_RADIUS_METERS
+): number {
+  let count = 0;
+  const anchors: { creationTime: number; location: AssetLocation }[] = [];
+
+  for (const la of index.located) {
+    const location: AssetLocation = { latitude: la.lat, longitude: la.lng };
+    const d = distanceMeters(location, origin);
+    if (la.mediaType === MediaType.VIDEO) {
+      if (d <= radiusM) count++;
+    } else {
+      if (la.creationTime != null) anchors.push({ creationTime: la.creationTime, location });
+      if (d <= radiusM) count++;
+    }
+  }
+
+  if (index.unlocatedVideos.length > 0 && anchors.length > 0) {
+    const sorted = [...anchors].sort((a, b) => a.creationTime - b.creationTime);
+    const times = sorted.map((a) => a.creationTime);
+    for (const uv of index.unlocatedVideos) {
+      const idx = nearestIndex(times, uv.creationTime);
+      const anchor = sorted[idx];
+      if (!anchor) continue;
+      if (Math.abs(anchor.creationTime - uv.creationTime) > ESTIMATE_WINDOW_MS) continue;
+      if (distanceMeters(anchor.location, origin) <= radiusM) count++;
+    }
+  }
+
+  return count;
+}
+
 export function refreshNearby() {
   // A manual refresh rebuilds from scratch, so drop the identity cache too —
   // otherwise a since-edited asset could keep a stale reused object.

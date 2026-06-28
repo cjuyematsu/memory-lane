@@ -4,6 +4,7 @@ import type { AssetIndex } from '@/hooks/use-located-assets';
 import {
   computeNearby,
   mergeNearbyByRecency,
+  nearbyCount,
   NEAR_ME_RADIUS_METERS,
   sameNearby,
   type NearbyAsset,
@@ -241,5 +242,85 @@ describe('computeNearby radius', () => {
     const { videos } = computeNearby(index, assetsOf(['near-anchor', 'uv2']), origin);
     expect(videos.map((v) => v.asset.id)).toEqual(['uv2']);
     expect(videos[0].isEstimated).toBe(true);
+  });
+});
+
+describe('nearbyCount', () => {
+  const origin = { latitude: 40, longitude: -75 };
+  // ~111m, ~445m, ~1112m north of the origin (1° lat ≈ 111.2km).
+  const M111 = 40.001;
+  const M445 = 40.004;
+  const M1112 = 40.01;
+
+  const located = (
+    id: string,
+    lat: number,
+    kind: 'photo' | 'video',
+    creationTime: number | null = 1000
+  ) => ({
+    id,
+    lat,
+    lng: -75,
+    creationTime,
+    mediaType: kind === 'video' ? MediaType.VIDEO : MediaType.IMAGE,
+  });
+
+  const indexOf = (
+    entries: ReturnType<typeof located>[],
+    unlocatedVideos: { id: string; creationTime: number }[] = []
+  ): AssetIndex =>
+    ({
+      located: entries,
+      unlocatedVideos,
+      processedIds: [...entries.map((e) => e.id), ...unlocatedVideos.map((v) => v.id)],
+    }) as AssetIndex;
+
+  const assetsOf = (ids: string[]) => ids.map((id) => ({ id }) as Asset);
+
+  // The whole reason this helper exists is to match what Near Me shows, so every
+  // case also cross-checks against computeNearby's photo + video counts.
+  const computeCount = (index: AssetIndex, ids: string[], r?: number) => {
+    const { photos, videos } = computeNearby(index, assetsOf(ids), origin, r);
+    return photos.length + videos.length;
+  };
+
+  it('is 0 for an empty index', () => {
+    expect(nearbyCount(indexOf([]), origin)).toBe(0);
+  });
+
+  it('counts photos + videos within the radius, dropping the rest', () => {
+    const index = indexOf([
+      located('p-near', M111, 'photo'),
+      located('v-near', M111, 'video'),
+      located('p-far', M1112, 'photo'),
+    ]);
+    expect(nearbyCount(index, origin)).toBe(2);
+    expect(nearbyCount(index, origin)).toBe(computeCount(index, ['p-near', 'v-near', 'p-far']));
+  });
+
+  it('respects an explicit radius at the boundary (just inside vs just outside)', () => {
+    const index = indexOf([located('mid', M445, 'photo')]);
+    expect(nearbyCount(index, origin, 500)).toBe(1); // ~445m inside 500m
+    expect(nearbyCount(index, origin, 150)).toBe(0); // outside the 150m default
+    expect(nearbyCount(index, origin, 500)).toBe(computeCount(index, ['mid'], 500));
+  });
+
+  it('counts an estimated GPS-less video when its anchor is in range', () => {
+    const index = indexOf(
+      [located('near-anchor', M111, 'photo', 5000)],
+      [{ id: 'uv', creationTime: 5000 }]
+    );
+    // The anchor photo + the video estimated onto it both land in range.
+    expect(nearbyCount(index, origin)).toBe(2);
+    expect(nearbyCount(index, origin)).toBe(computeCount(index, ['near-anchor', 'uv']));
+  });
+
+  it('excludes an estimated video whose anchor is out of range', () => {
+    const index = indexOf(
+      [located('far-anchor', M1112, 'photo', 5000)],
+      [{ id: 'uv', creationTime: 5000 }]
+    );
+    expect(nearbyCount(index, origin)).toBe(0);
+    expect(nearbyCount(index, origin)).toBe(computeCount(index, ['far-anchor', 'uv']));
   });
 });

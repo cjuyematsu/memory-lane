@@ -1,10 +1,9 @@
 import { useEffect, useState } from 'react';
 
-export type BannerData =
-  // A single place the user just entered (geofence). Tapping opens that cluster.
-  | { kind: 'cluster'; clusterId: string; count: number }
-  // The app-open "N memories near you" greeting. Tapping opens the Near Me grid.
-  | { kind: 'nearby'; count: number };
+// "N memories near you". Driven by both the app-open greeter and a foreground
+// geofence enter — both want the Near Me count and a tap that opens the Near Me
+// grid (not a single place's cluster view). `count` is that nearby count.
+export type BannerData = { kind: 'nearby'; count: number };
 
 // Module-level so the geofence task handler (non-React) can trigger the banner
 // that the MemoryBanner component renders.
