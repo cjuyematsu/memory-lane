@@ -25,6 +25,7 @@ import { Asset, MediaType } from 'expo-media-library';
 import ShareIcon from '@/assets/icons/share.svg';
 import ShuffleIcon from '@/assets/icons/shuffle.svg';
 import { LoadingPolaroid } from '@/components/brand/loading-polaroid';
+import { ErrorBoundary } from '@/components/error-boundary';
 import { FeedCard } from '@/components/feed/feed-card';
 import { FeedCardEventsContext, type FeedCardEvents } from '@/components/feed/feed-context';
 import {
@@ -44,7 +45,9 @@ import {
 import { useMediaPermission } from '@/hooks/use-media-permission';
 import { prefetchReverseGeocode } from '@/hooks/use-reverse-geocode';
 import { getAssetRatio, setAssetRatio } from '@/lib/asset-ratio-cache';
+import { nextOnDeviceIndex } from '@/lib/feed-on-device';
 import { entryCandidateOrder } from '@/lib/feed-entry';
+import { ENTRY_SELECT_DEADLINE_MS } from '@/lib/loading-timeouts';
 import { getWarmedEntryId } from '@/lib/feed-entry-warm';
 import { cardLoadPriority } from '@/lib/feed-priority';
 import { markFirstPaint } from '@/lib/first-paint';
@@ -250,6 +253,11 @@ export function Feed({
     setTransitionActive(false);
   }, []);
 
+  // "Find one on device" is invoked from a card (which can't reference
+  // assets/listRef, defined below); route through a ref kept current by the
+  // effect below, so cardEvents stays a stable memo.
+  const findOnDeviceHandlerRef = useRef<(assetId: string) => void>(() => {});
+
   const cardEvents = useMemo<FeedCardEvents>(
     () => ({
       onCardReady: (assetId: string) => {
@@ -267,6 +275,7 @@ export function Feed({
           if (transitionFadeDoneRef.current) releaseTransition();
         }
       },
+      onFindOnDevice: (assetId: string) => findOnDeviceHandlerRef.current(assetId),
     }),
     [releaseTransition]
   );
@@ -474,23 +483,35 @@ export function Feed({
       // tries a random sample first (keeps the "random memory" feel) then the
       // newest photos (most likely kept on-device under Optimize Storage).
       let cancelled = false;
+      let committed = false;
+      const commitOnce = (idx: number) => {
+        if (cancelled || committed) return;
+        committed = true;
+        commit(idx);
+      };
+      // Hard deadline: entry selection must ALWAYS resolve, so a slow probe pass
+      // can never leave the feed pinned on the loading Polaroid (Image #2).
+      // After this, open the newest photo and let its in-card load state cover
+      // the wait. (Per-probe is already bounded in loadAssetIsInCloud.)
+      const deadline = setTimeout(() => commitOnce(0), ENTRY_SELECT_DEADLINE_MS);
       (async () => {
         const order = entryCandidateOrder(assets.length);
         for (const idx of order) {
           const inCloud = await loadAssetIsInCloud(assets[idx]);
-          if (cancelled) return;
+          if (cancelled || committed) return;
           if (!inCloud) {
-            commit(idx);
+            commitOnce(idx);
             return;
           }
         }
         // Whole sample was iCloud-resident (heavily offloaded library): open on
-        // the newest photo and let the in-card "Loading from iCloud" state
+        // the newest photo and let the in-card "Accessing from iCloud" state
         // explain the wait while it downloads.
-        commit(0);
+        commitOnce(0);
       })();
       return () => {
         cancelled = true;
+        clearTimeout(deadline);
       };
     }
   }, [
@@ -608,6 +629,24 @@ export function Feed({
     const cached = getCachedMetadata(currentId);
     requestShare(asset, cached?.mediaType === MediaType.VIDEO);
   }, [assets, currentId]);
+
+  // User tapped "Find one on device" on a card whose photo couldn't load: jump
+  // to the nearest on-device memory (instant cut — no crossfade, since fading
+  // from a black error frame is meaningless). No-op if none is known on-device.
+  // Never automatic; only this explicit tap moves the user.
+  useEffect(() => {
+    findOnDeviceHandlerRef.current = (assetId: string) => {
+      if (assetId !== currentId) return;
+      const idx = assets.findIndex((a) => a.id === currentId);
+      if (idx < 0) return;
+      const candidates = assets.map((a) => ({ inCloud: getCachedIsInCloud(a.id) }));
+      const next = nextOnDeviceIndex(candidates, idx);
+      if (next == null) return;
+      setCurrentId(assets[next].id);
+      if (rememberLastPosition) rememberedAssetId = assets[next].id;
+      listRef.current?.scrollToIndex({ index: next, animated: false });
+    };
+  }, [assets, currentId, rememberLastPosition]);
 
   // Hard cap on the disabled window: if the destination card never reports
   // rendered (hung load, or the library reloaded mid-transition and the
@@ -791,16 +830,30 @@ export function Feed({
                 data={assets}
                 keyExtractor={(item) => item.id}
                 renderItem={({ item, index }) => (
-                  <FeedCard
-                    asset={item}
-                    isCurrent={item.id === currentId}
-                    isActive={isActive}
-                    priority={cardLoadPriority(index, currentIndex)}
-                    width={layout.width}
-                    height={layout.height}
-                    frame={frame}
-                    onZoomChange={handleZoom}
-                  />
+                  // Per-card boundary: a single corrupt asset / bad metadata
+                  // throw shows a fallback frame instead of taking the whole
+                  // feed (and app) down.
+                  <ErrorBoundary
+                    fallback={() => (
+                      <View
+                        style={[
+                          styles.cardFallback,
+                          { width: layout.width, height: layout.height },
+                        ]}>
+                        <Text style={styles.body}>Couldn&apos;t show this memory.</Text>
+                      </View>
+                    )}>
+                    <FeedCard
+                      asset={item}
+                      isCurrent={item.id === currentId}
+                      isActive={isActive}
+                      priority={cardLoadPriority(index, currentIndex)}
+                      width={layout.width}
+                      height={layout.height}
+                      frame={frame}
+                      onZoomChange={handleZoom}
+                    />
+                  </ErrorBoundary>
                 )}
                 scrollEnabled={!zooming}
                 pagingEnabled
@@ -929,6 +982,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 16,
+    paddingHorizontal: 24,
+  },
+  cardFallback: {
+    backgroundColor: Paper,
+    alignItems: 'center',
+    justifyContent: 'center',
     paddingHorizontal: 24,
   },
   title: {

@@ -1,0 +1,33 @@
+// Centralized, tunable upper bounds for every native call / load that could
+// otherwise hang indefinitely. The app must never sit on a spinner forever, so
+// each await that hits the OS (Photos, Location, iCloud, network) is bounded by
+// one of these via lib/async-safety. These are conservative starting points —
+// tune against real-device behavior (Xcode console / Network Link Conditioner).
+
+// ── Feed photo (the visible card) ───────────────────────────────────────────
+/** Still loading after this → swap the spinner label to "Accessing from iCloud…". */
+export const ICLOUD_ACCESS_HINT_MS = 2500;
+/** Hard ceiling on one card's image load; past this we treat it as unreachable
+ *  (drop the image to free the held fetch, show "Photo couldn't load" with
+ *  Retry / Find one on device) instead of spinning. */
+export const ICLOUD_LOAD_DEADLINE_MS = 12000;
+
+// ── Entry selection (first photo on cold launch) ────────────────────────────
+/** Per-candidate iCloud probe; a slow probe is treated as offloaded and skipped. */
+export const ENTRY_PROBE_MS = 2500;
+/** Whole entry-selection deadline; if nothing committed, open the newest photo. */
+export const ENTRY_SELECT_DEADLINE_MS = 5000;
+
+// ── Cold-start system calls ─────────────────────────────────────────────────
+export const MEDIA_PERMISSION_MS = 6000;
+export const LIBRARY_QUERY_MS = 12000;
+export const SCREENSHOT_FILTER_MS = 8000;
+export const LOCATION_PERM_MS = 6000;
+export const LOCATION_FIX_MS = 8000;
+export const LOCATE_READ_MS = 6000;
+export const ONBOARDING_PROBE_MS = 4000;
+export const CONNECTIVITY_CHECK_MS = 2000;
+
+// ── Silent auto-retry policy for cold-start calls (then the error/Retry UI) ──
+export const COLD_START_RETRIES = 3;
+export const COLD_START_RETRY_BASE_MS = 600;

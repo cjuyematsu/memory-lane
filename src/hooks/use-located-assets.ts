@@ -1,6 +1,8 @@
 import { Asset, MediaType } from 'expo-media-library';
 
 import { loadAssetTimeLocation } from '@/hooks/use-asset-metadata';
+import { withTimeoutDefault } from '@/lib/async-safety';
+import { LOCATE_READ_MS } from '@/lib/loading-timeouts';
 import { persistedFile, readPersisted } from '@/lib/persisted-file';
 
 // Shared, persisted index of every asset's location/time/type. This is the
@@ -143,34 +145,44 @@ export type LocateResult =
   | { kind: 'none' };
 
 async function locate(asset: Asset): Promise<LocateResult> {
-  try {
-    const [tl, mediaType] = await Promise.all([
-      loadAssetTimeLocation(asset),
-      asset.getMediaType().catch(() => null),
-    ]);
-    const mt = mediaType ?? MediaType.IMAGE;
-    if (tl.location) {
-      return {
-        kind: 'located',
-        value: {
-          id: asset.id,
-          lat: tl.location.latitude,
-          lng: tl.location.longitude,
-          creationTime: tl.creationTime,
-          mediaType: mt,
-        },
-      };
-    }
-    if (mt === MediaType.VIDEO && tl.creationTime != null) {
-      return {
-        kind: 'unlocatedVideo',
-        value: { id: asset.id, creationTime: tl.creationTime },
-      };
-    }
-    return { kind: 'none' };
-  } catch {
-    return { kind: 'none' };
-  }
+  // Bounded so one stuck native read can't stall its whole batch in
+  // runLocateSweep — this index feeds the geofence notifications, which must
+  // keep making progress. A timed-out asset is simply skipped (kind: 'none')
+  // and re-attempted on a later sync.
+  return withTimeoutDefault(
+    (async (): Promise<LocateResult> => {
+      try {
+        const [tl, mediaType] = await Promise.all([
+          loadAssetTimeLocation(asset),
+          asset.getMediaType().catch(() => null),
+        ]);
+        const mt = mediaType ?? MediaType.IMAGE;
+        if (tl.location) {
+          return {
+            kind: 'located',
+            value: {
+              id: asset.id,
+              lat: tl.location.latitude,
+              lng: tl.location.longitude,
+              creationTime: tl.creationTime,
+              mediaType: mt,
+            },
+          };
+        }
+        if (mt === MediaType.VIDEO && tl.creationTime != null) {
+          return {
+            kind: 'unlocatedVideo',
+            value: { id: asset.id, creationTime: tl.creationTime },
+          };
+        }
+        return { kind: 'none' };
+      } catch {
+        return { kind: 'none' };
+      }
+    })(),
+    LOCATE_READ_MS,
+    { kind: 'none' }
+  );
 }
 
 // Pure: fold a batch of locate results for `processedAssets` onto a kept base

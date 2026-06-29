@@ -12,6 +12,14 @@ import {
   Query,
 } from 'expo-media-library';
 
+import { withRetry, withTimeout, withTimeoutDefault } from '@/lib/async-safety';
+import {
+  COLD_START_RETRIES,
+  COLD_START_RETRY_BASE_MS,
+  LIBRARY_QUERY_MS,
+  SCREENSHOT_FILTER_MS,
+} from '@/lib/loading-timeouts';
+
 export type FeedState =
   | { status: 'idle' }
   | { status: 'loading' }
@@ -129,12 +137,23 @@ async function runReload(): Promise<Asset[]> {
   if (inflightReload) return inflightReload;
   inflightReload = (async () => {
     try {
-      const raw = await new Query()
-        .within(AssetField.MEDIA_TYPE, [MediaType.IMAGE, MediaType.VIDEO])
-        .orderBy({ key: AssetField.CREATION_TIME, ascending: false })
-        .limit(10000)
-        .exe();
-      const filtered = await rejectScreenshots(raw);
+      // Bound the native query: MediaLibrary's exe() has no timeout, so on a
+      // cold/stalled Photos framework an unbounded await would pin the feed on
+      // the loading Polaroid forever. A timeout throws → finally clears the
+      // inflight latch → the caller's retry/error path takes over.
+      const raw = await withTimeout(
+        new Query()
+          .within(AssetField.MEDIA_TYPE, [MediaType.IMAGE, MediaType.VIDEO])
+          .orderBy({ key: AssetField.CREATION_TIME, ascending: false })
+          .limit(10000)
+          .exe(),
+        LIBRARY_QUERY_MS,
+        'library query'
+      );
+      // Screenshot filtering reads per-asset native subtypes; if it stalls,
+      // degrade to the unfiltered list (show everything, maybe a few
+      // screenshots) rather than blocking the whole feed.
+      const filtered = await withTimeoutDefault(rejectScreenshots(raw), SCREENSHOT_FILTER_MS, raw);
       // Library unchanged since last reload → keep the stable reference and
       // publish nothing, so a spurious change event can't churn the feed.
       if (cachedAssets && sameAssetIds(cachedAssets, filtered)) {
@@ -191,7 +210,11 @@ export function useAssetFeed(enabled: boolean) {
   useEffect(() => {
     if (!enabled || state.status !== 'idle') return;
     let stale = false;
-    runReload().catch((e) => {
+    // Silent bounded auto-retry: a transient cold-launch stall (Photos framework
+    // not warm) recovers on its own; only a persistent failure surfaces the
+    // error/Retry screen. Each attempt is a fresh runReload (the inflight latch
+    // self-clears in finally), so a retry never re-awaits a rejected promise.
+    withRetry(() => runReload(), COLD_START_RETRIES, COLD_START_RETRY_BASE_MS).catch((e) => {
       if (stale) return;
       setState({
         status: 'error',

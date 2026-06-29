@@ -2,6 +2,31 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import * as Location from 'expo-location';
 
+import { withTimeout, withTimeoutDefault } from '@/lib/async-safety';
+import { LOCATION_FIX_MS, LOCATION_PERM_MS } from '@/lib/loading-timeouts';
+
+// Fetch a coordinate without hanging: getCurrentPositionAsync has no timeout and
+// can stall indefinitely on a cold GPS. Bound it, and on a stall fall back to
+// the OS's last known position (instant, cached) before giving up.
+async function getLocationFix(): Promise<{ latitude: number; longitude: number }> {
+  try {
+    const pos = await withTimeout(
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+      LOCATION_FIX_MS,
+      'location fix'
+    );
+    return { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+  } catch (e) {
+    const last = await withTimeoutDefault(
+      Location.getLastKnownPositionAsync(),
+      LOCATION_FIX_MS,
+      null
+    );
+    if (last) return { latitude: last.coords.latitude, longitude: last.coords.longitude };
+    throw e;
+  }
+}
+
 export type LocationState =
   | { status: 'idle' }
   | { status: 'requesting' }
@@ -50,20 +75,16 @@ export function useCurrentLocation() {
   // Settings.
   const load = useCallback(async () => {
     try {
-      const perm = await Location.getForegroundPermissionsAsync();
+      const perm = await withTimeout(
+        Location.getForegroundPermissionsAsync(),
+        LOCATION_PERM_MS,
+        'location permission'
+      );
       if (perm.status === 'granted') {
         if (stateRef.current.status === 'ready') return; // already have a fix
         setState({ status: 'requesting' });
-        const pos = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        });
-        setState({
-          status: 'ready',
-          coords: {
-            latitude: pos.coords.latitude,
-            longitude: pos.coords.longitude,
-          },
-        });
+        const coords = await getLocationFix();
+        setState({ status: 'ready', coords });
         return;
       }
       if (perm.canAskAgain) {
@@ -89,13 +110,8 @@ export function useCurrentLocation() {
         setState({ status: 'denied', canAskAgain: perm.canAskAgain });
         return;
       }
-      const pos = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
-      });
-      setState({
-        status: 'ready',
-        coords: { latitude: pos.coords.latitude, longitude: pos.coords.longitude },
-      });
+      const coords = await getLocationFix();
+      setState({ status: 'ready', coords });
     } catch (e) {
       setState({
         status: 'error',

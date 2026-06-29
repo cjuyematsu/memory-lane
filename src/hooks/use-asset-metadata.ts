@@ -3,6 +3,9 @@ import { Platform } from 'react-native';
 
 import { Asset, MediaType } from 'expo-media-library';
 
+import { withTimeout, withTimeoutDefault } from '@/lib/async-safety';
+import { ENTRY_PROBE_MS, LOCATE_READ_MS } from '@/lib/loading-timeouts';
+
 export type AssetLocation = { latitude: number; longitude: number };
 
 export type AssetMetadata = {
@@ -79,9 +82,21 @@ export async function loadAssetIsInCloud(asset: Asset): Promise<boolean> {
 
   const p = (async () => {
     try {
-      const inCloud = await asset.getIsInCloud().catch(() => false);
-      cappedSet(inCloudCache, asset.id, inCloud);
-      return inCloud;
+      // A genuine result (including a thrown read → false) is cached. A *timeout*
+      // is only a guess: treat a slow probe as offloaded so entry selection skips
+      // it, but DON'T cache the guess — a real value can still be read later, and
+      // getIsInCloud has no built-in timeout so an unbounded await could hang the
+      // cold-launch entry loop forever.
+      const probe = asset.getIsInCloud().then(
+        (v) => ({ timedOut: false, value: v }),
+        () => ({ timedOut: false, value: false })
+      );
+      const result = await withTimeoutDefault(probe, ENTRY_PROBE_MS, {
+        timedOut: true,
+        value: true,
+      });
+      if (!result.timedOut) cappedSet(inCloudCache, asset.id, result.value);
+      return result.value;
     } finally {
       inCloudInflight.delete(asset.id);
     }
@@ -111,8 +126,10 @@ export async function loadAssetLocation(asset: Asset): Promise<AssetLocation | n
       // lose its caption forever: the framework isn't warm for that very first
       // read, it throws, the `null` gets cached, and every retry then short-
       // circuits to it. A *successfully* read `null` (a photo with no GPS) is
-      // still cached below so those aren't re-read.
-      const loc = await asset.getLocation();
+      // still cached below so those aren't re-read. The read is bounded: a
+      // *hang* (the native call has no timeout) becomes a throw, which
+      // propagates uncached down the same retry path as any other failure.
+      const loc = await withTimeout(asset.getLocation(), LOCATE_READ_MS, 'getLocation');
       cappedSet(locationCache, asset.id, loc);
       return loc;
     } finally {
@@ -134,7 +151,8 @@ export async function loadAssetCreationTime(asset: Asset): Promise<number | null
     try {
       // Same as loadAssetLocation: a thrown read must propagate uncached so it
       // can be retried. A successfully read value (including 0/null) is cached.
-      const t = await asset.getCreationTime();
+      // Bounded so a hang becomes a throw down that same retry path.
+      const t = await withTimeout(asset.getCreationTime(), LOCATE_READ_MS, 'getCreationTime');
       cappedSet(timeCache, asset.id, t);
       return t;
     } finally {
@@ -168,7 +186,11 @@ export async function hydrateAsset(asset: Asset): Promise<AssetMetadata> {
         // getMediaType isn't caption-critical, so a failure there just falls back
         // to UNKNOWN and never blocks the date/place.
         const [mediaType, ctRes, locRes] = await Promise.all([
-          asset.getMediaType().catch(() => MediaType.UNKNOWN),
+          withTimeoutDefault(
+            asset.getMediaType().catch(() => MediaType.UNKNOWN),
+            LOCATE_READ_MS,
+            MediaType.UNKNOWN
+          ),
           loadAssetCreationTime(asset).then(
             (v): { ok: boolean; v: number | null } => ({ ok: true, v }),
             (): { ok: boolean; v: number | null } => ({ ok: false, v: null })
@@ -184,7 +206,12 @@ export async function hydrateAsset(asset: Asset): Promise<AssetMetadata> {
         // Fall back to modification time if the asset has no (valid) creation
         // time, so the date is always present.
         const creationTime =
-          firstValidTime(ctRes.v) ?? (await asset.getModificationTime().catch(() => null));
+          firstValidTime(ctRes.v) ??
+          (await withTimeoutDefault(
+            asset.getModificationTime().catch(() => null),
+            LOCATE_READ_MS,
+            null
+          ));
         const meta: AssetMetadata = {
           uri: asset.id,
           creationTime,
@@ -203,11 +230,15 @@ export async function hydrateAsset(asset: Asset): Promise<AssetMetadata> {
       }
 
       const [info, mediaType, locationFromCache] = await Promise.all([
-        asset.getInfo().catch(() => null),
-        asset.getMediaType().catch(() => MediaType.UNKNOWN),
+        withTimeoutDefault(asset.getInfo().catch(() => null), LOCATE_READ_MS, null),
+        withTimeoutDefault(
+          asset.getMediaType().catch(() => MediaType.UNKNOWN),
+          LOCATE_READ_MS,
+          MediaType.UNKNOWN
+        ),
         locationCache.has(asset.id)
           ? Promise.resolve(locationCache.get(asset.id) ?? null)
-          : asset.getLocation().catch(() => null),
+          : withTimeoutDefault(asset.getLocation().catch(() => null), LOCATE_READ_MS, null),
       ]);
       // Resolve with whatever we got rather than rejecting: a thrown getInfo()
       // used to leave meta null forever (retries exhausted), which kept the

@@ -4,6 +4,8 @@ import * as Sharing from 'expo-sharing';
 import { File, Paths } from 'expo-file-system';
 import { type Asset } from 'expo-media-library';
 
+import { TimeoutError, withTimeout as withTimeoutBase } from '@/lib/async-safety';
+
 // Bridges the share buttons (feed card + Near Me viewer) to the global
 // ShareHost overlay, following the module-pub/sub convention used by
 // `pending-cluster.ts` / `foreground-banner.ts`. The host renders a chooser
@@ -201,21 +203,15 @@ export const RAW_SHARE_TIMEOUT_MS = 30000;
 // Reject with `ShareTimeoutError` if `p` hasn't settled within `ms`. This does
 // NOT cancel the underlying work — the native iCloud download keeps running and
 // iOS caches it, so a retry usually succeeds quickly — it only frees the UI from
-// waiting on a hung/slow download.
-export function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new ShareTimeoutError()), ms);
-    p.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (err) => {
-        clearTimeout(timer);
-        reject(err);
-      }
-    );
-  });
+// waiting on a hung/slow download. Delegates the timer logic to the shared
+// async-safety helper, mapping its generic TimeoutError to the share-specific
+// error so the caller's friendly iCloud message is unchanged.
+export async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  try {
+    return await withTimeoutBase(p, ms);
+  } catch (err) {
+    throw err instanceof TimeoutError ? new ShareTimeoutError() : err;
+  }
 }
 
 // ── Native share flow (driven by ShareHost) ─────────────────────────────────

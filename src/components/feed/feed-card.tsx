@@ -1,5 +1,5 @@
-import { memo, useContext, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, AppState, StyleSheet, Text, View } from 'react-native';
+import { memo, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, AppState, Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
@@ -17,15 +17,14 @@ import { DisplayFont, FrameMargin, Ink, Paper } from '@/constants/theme';
 import { useAssetMetadata, usePlaybackUri } from '@/hooks/use-asset-metadata';
 import { useReverseGeocode } from '@/hooks/use-reverse-geocode';
 import { getAssetRatio, setAssetRatio } from '@/lib/asset-ratio-cache';
+import { isOnline } from '@/lib/connectivity';
+import { ICLOUD_ACCESS_HINT_MS, ICLOUD_LOAD_DEADLINE_MS } from '@/lib/loading-timeouts';
 import { formatTimeAgo } from '@/utils/time-ago';
 
 const PLACE_TIMEOUT_MS = 1500;
 // Hard cap so a card can never stay invisible (= a white screen) if its image
 // somehow reports neither load nor error.
 const CARD_VISIBLE_TIMEOUT_MS = 1500;
-// After this long still loading, surface "Loading from iCloud…" under the
-// spinner so a slow offloaded-photo download reads as working, not frozen.
-const ICLOUD_HINT_DELAY_MS = 2500;
 
 export const FeedCard = memo(function FeedCard({
   asset,
@@ -57,7 +56,7 @@ export const FeedCard = memo(function FeedCard({
   // Android). The Android file:// path from getInfo() often isn't readable
   // under scoped storage and rendered blank, so don't gate the image on it.
   const thumbnailUri = asset.id;
-  const { onCardReady } = useContext(FeedCardEventsContext);
+  const { onCardReady, onFindOnDevice } = useContext(FeedCardEventsContext);
 
   // Keyed by asset id so a recycled/changed card derives a fresh "not timed
   // out" without a state reset in the effect body.
@@ -65,11 +64,17 @@ export const FeedCard = memo(function FeedCard({
   const placeTimedOut = timedOutId === asset.id;
   const [imageReady, setImageReady] = useState(false);
   const [safetyVisible, setSafetyVisible] = useState(false);
-  // Keyed by asset id (like timedOutId) so a recycled card resets without a
-  // setState in the effect body. True once a still-loading card has waited long
-  // enough that it's clearly an iCloud download.
-  const [slowLoadId, setSlowLoadId] = useState<string | null>(null);
-  const slowLoad = slowLoadId === asset.id && !imageReady;
+  // Load phase, all keyed by asset id (like timedOutId) so a recycled card
+  // re-derives a fresh state without a setState in the effect body:
+  //  - accessing:   waited past the hint while online → "Accessing from iCloud…"
+  //  - unreachable: offline, or past the hard deadline → drop the image (frees
+  //                 the held native fetch) and offer Retry / Find one on device.
+  const [accessingId, setAccessingId] = useState<string | null>(null);
+  const [unreachableId, setUnreachableId] = useState<string | null>(null);
+  // Bumping this remounts the <Image> (via `key`) for a fresh load attempt.
+  const [reloadNonce, setReloadNonce] = useState(0);
+  const accessing = accessingId === asset.id && !imageReady;
+  const unreachable = unreachableId === asset.id && !imageReady;
   // Landscape photos are letterboxed (contain) on #000; everything else fills
   // the 3:4 frame (cover). The Asset has no dims, so we SEED orientation from the
   // shared ratio cache (populated as photos load here + in the Near Me grid) — a
@@ -105,13 +110,39 @@ export const FeedCard = memo(function FeedCard({
     return () => clearTimeout(t);
   }, [imageReady]);
 
-  // If a card is still loading after a beat, it's almost certainly downloading
-  // from iCloud — surface that under the spinner so it doesn't read as frozen.
+  // Past the hint mark and still loading: if the phone is offline there's no
+  // point waiting out the deadline — fail straight to unreachable. Otherwise
+  // surface "Accessing from iCloud…" so the wait reads as working, not frozen.
+  // Re-armed by reloadNonce so a retry restarts the clock.
   useEffect(() => {
     if (imageReady) return;
-    const t = setTimeout(() => setSlowLoadId(asset.id), ICLOUD_HINT_DELAY_MS);
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      const online = await isOnline();
+      if (cancelled) return;
+      if (online) setAccessingId(asset.id);
+      else setUnreachableId(asset.id);
+    }, ICLOUD_ACCESS_HINT_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [imageReady, asset.id, reloadNonce]);
+
+  // Hard ceiling: a fetch that never lands becomes unreachable so a card can
+  // never spin forever (the bug behind the endless "Loading from iCloud…").
+  useEffect(() => {
+    if (imageReady) return;
+    const t = setTimeout(() => setUnreachableId(asset.id), ICLOUD_LOAD_DEADLINE_MS);
     return () => clearTimeout(t);
-  }, [imageReady, asset.id]);
+  }, [imageReady, asset.id, reloadNonce]);
+
+  const handleRetry = useCallback(() => {
+    setUnreachableId((id) => (id === asset.id ? null : id));
+    setAccessingId((id) => (id === asset.id ? null : id));
+    setImageReady(false);
+    setReloadNonce((n) => n + 1);
+  }, [asset.id]);
 
   const opacity = useSharedValue(0);
   const opacityStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
@@ -146,8 +177,11 @@ export const FeedCard = memo(function FeedCard({
     <Animated.View style={[styles.container, { width, height }, opacityStyle]}>
       <PhotoFrame top={frame.top} left={frame.left} width={frame.width} height={frame.height}>
         <PinchZoom onActiveChange={onZoomChange}>
-          {thumbnailUri ? (
+          {thumbnailUri && !unreachable ? (
             <Image
+              // The nonce remounts the image for a fresh fetch when the user
+              // taps retry (re-issuing usually lands fast on cached progress).
+              key={`${asset.id}:${reloadNonce}`}
               source={{ uri: thumbnailUri }}
               style={StyleSheet.absoluteFill}
               contentFit={isLandscape ? 'contain' : 'cover'}
@@ -177,13 +211,30 @@ export const FeedCard = memo(function FeedCard({
           {isVideo && isCurrent && isActive && playbackUri ? (
             <FeedVideo uri={playbackUri} contain={isLandscape} />
           ) : null}
-          {/* Only ever seen when the safety timeout reveals the card before its
-              image decoded (slow iCloud loads) — a bare black frame otherwise. */}
+          {/* Seen when the safety timeout reveals the card before its image
+              decoded (slow iCloud loads), or when the load gives up entirely. */}
           {!imageReady ? (
-            <View style={styles.loading} pointerEvents="none">
-              <ActivityIndicator color={Paper} />
-              {slowLoad ? <Text style={styles.loadingText}>Loading from iCloud…</Text> : null}
-            </View>
+            unreachable ? (
+              <View style={styles.loading}>
+                <Text style={styles.loadingText}>Photo couldn&apos;t load</Text>
+                <Pressable onPress={handleRetry} hitSlop={12} style={styles.retryButton}>
+                  <Text style={styles.retryLabel}>Retry</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => onFindOnDevice(asset.id)}
+                  hitSlop={12}
+                  style={styles.retryButton}>
+                  <Text style={styles.retryLabel}>Find one on device</Text>
+                </Pressable>
+              </View>
+            ) : (
+              <View style={styles.loading} pointerEvents="none">
+                <ActivityIndicator color={Paper} />
+                {accessing ? (
+                  <Text style={styles.loadingText}>Accessing from iCloud…</Text>
+                ) : null}
+              </View>
+            )
           ) : null}
         </PinchZoom>
       </PhotoFrame>
@@ -277,6 +328,20 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     marginTop: 14,
+    fontFamily: DisplayFont,
+    color: Paper,
+    fontSize: 12,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  retryButton: {
+    marginTop: 16,
+    borderWidth: 2,
+    borderColor: Paper,
+    paddingHorizontal: 18,
+    paddingVertical: 8,
+  },
+  retryLabel: {
     fontFamily: DisplayFont,
     color: Paper,
     fontSize: 12,

@@ -8,6 +8,8 @@ import {
   setOnboardingCompleted,
   useOnboarding,
 } from '@/hooks/use-onboarding';
+import { withTimeoutDefault } from '@/lib/async-safety';
+import { ONBOARDING_PROBE_MS } from '@/lib/loading-timeouts';
 import { shouldMigrateComplete } from '@/lib/onboarding-decision';
 
 // Same granular scope as use-media-permission.ts: photos + videos, never audio.
@@ -33,24 +35,35 @@ export function useOnboardingStatus(): OnboardingStatus {
   useEffect(() => {
     let active = true;
     (async () => {
-      const state = await loadOnboardingFromDisk();
+      // Every await here is bounded: this gate withholds the WHOLE app, so a
+      // single hung native read (disk or the Photos permission, neither of which
+      // has a built-in timeout) would strand the user on the boot Polaroid
+      // forever. On a stall we fall back to safe defaults and still decide.
+      const state = await withTimeoutDefault(loadOnboardingFromDisk(), ONBOARDING_PROBE_MS, {
+        completed: false,
+        started: false,
+        step: 0,
+      });
       // Migration: installs predating onboarding have no flag. If photos are
       // already granted, they've been through the old setup, so mark complete so
-      // the update doesn't re-onboard them.
+      // the update doesn't re-onboard them. A stalled/failed permission read
+      // resolves to `false` → don't migrate → show onboarding (the safe default).
       if (!state.completed) {
-        try {
-          const perm = await MediaLibrary.getPermissionsAsync(false, MEDIA_PERMISSIONS);
-          if (
-            shouldMigrateComplete({
-              completed: state.completed,
-              started: state.started,
-              mediaGranted: perm.granted,
-            })
-          ) {
-            setOnboardingCompleted(true);
-          }
-        } catch {
-          // If we can't read the permission, fall through and show onboarding.
+        const mediaGranted = await withTimeoutDefault(
+          MediaLibrary.getPermissionsAsync(false, MEDIA_PERMISSIONS)
+            .then((p) => p.granted)
+            .catch(() => false),
+          ONBOARDING_PROBE_MS,
+          false
+        );
+        if (
+          shouldMigrateComplete({
+            completed: state.completed,
+            started: state.started,
+            mediaGranted,
+          })
+        ) {
+          setOnboardingCompleted(true);
         }
       }
       if (active) setDecided(true);

@@ -4,6 +4,13 @@ import { AppState } from 'react-native';
 import * as MediaLibrary from 'expo-media-library';
 import type { GranularPermission } from 'expo-media-library';
 
+import { withRetry, withTimeout } from '@/lib/async-safety';
+import {
+  COLD_START_RETRIES,
+  COLD_START_RETRY_BASE_MS,
+  MEDIA_PERMISSION_MS,
+} from '@/lib/loading-timeouts';
+
 // A single shared photo-permission state across the whole app. expo's
 // `usePermissions` keeps per-hook state, so granting in Camera Roll wouldn't
 // update Near Me (or vice versa). This module holds one cached response and
@@ -29,7 +36,14 @@ function notify() {
 // flow (see `ensureMediaPermission`, called from the photos step of
 // components/onboarding/onboarding-flow.tsx).
 async function refresh(): Promise<MediaLibrary.PermissionResponse> {
-  const res = await MediaLibrary.getPermissionsAsync(false, MEDIA_PERMISSIONS);
+  // Bounded: getPermissionsAsync has no timeout, and this read gates BOTH tabs
+  // (a null permission renders the loading Polaroid). A hang here is what could
+  // strand the app on the spinner, so cap it and let the caller retry.
+  const res = await withTimeout(
+    MediaLibrary.getPermissionsAsync(false, MEDIA_PERMISSIONS),
+    MEDIA_PERMISSION_MS,
+    'media permission'
+  );
   cached = res;
   notify();
   return res;
@@ -93,9 +107,14 @@ export function useMediaPermission(): [
     subscribers.add(cb);
     ensureAppStateListener();
     if (cached == null && !inflight) {
-      inflight = refresh().finally(() => {
+      // Silent bounded auto-retry so a transient cold-launch stall self-heals
+      // instead of pinning both tabs on the loading Polaroid. If every attempt
+      // still fails, the AppState foreground `recheck` retries on the next
+      // 'active', so the app recovers on its own.
+      inflight = withRetry(refresh, COLD_START_RETRIES, COLD_START_RETRY_BASE_MS).finally(() => {
         inflight = null;
       });
+      inflight.catch(() => {});
     }
     return () => {
       subscribers.delete(cb);

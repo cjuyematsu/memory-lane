@@ -27,6 +27,7 @@ import { scheduleOnRN } from 'react-native-worklets';
 import FilmIcon from '@/assets/icons/film.svg';
 import ShareIcon from '@/assets/icons/share.svg';
 import XIcon from '@/assets/icons/x.svg';
+import { ErrorBoundary } from '@/components/error-boundary';
 import { PhotoFrame, frameTop } from '@/components/feed/photo-frame';
 import { PinchZoom } from '@/components/pinch-zoom';
 import { DisplayFont, FrameMargin, Ink, Paper, PhotoRatio } from '@/constants/theme';
@@ -154,14 +155,13 @@ export function Viewer({
     });
   }, [index, width]);
 
-  useEffect(() => {
-    const uris: string[] = [];
-    for (const d of [-2, -1, 1, 2, 3]) {
-      const it = items[index + d];
-      if (it) uris.push(it.asset.id);
-    }
-    if (uris.length > 0) Image.prefetch(uris).catch(() => {});
-  }, [index, items]);
+  // NOTE: do not Image.prefetch() the neighbor ph:// URIs here. expo-image's
+  // prefetch path has no view-size context, so it requests
+  // PHImageManagerMaximumSize — for an iCloud-optimized library that downloads
+  // and decodes the FULL-resolution originals (5 at a time), which spiked
+  // memory and could jetsam the app. The pager already mounts ±1 neighbors
+  // (windowSize), and those decode at view size — enough lookahead without the
+  // OOM risk. (Same reason the feed deliberately avoids prefetch.)
 
   // Report the on-screen photo up to the parent (fires once per settled swipe),
   // so reopening — or a remount around the memory feed — lands on the live
@@ -203,15 +203,22 @@ export function Viewer({
             getItemLayout={(_, i) => ({ length: width, offset: width * i, index: i })}
             keyExtractor={(it) => it.asset.id}
             renderItem={({ item, index: i }) => (
-              <ViewerPage
-                item={item}
-                isCurrent={i === index}
-                isActive={isActive}
-                width={width}
-                height={height}
-                bottomChrome={tapToAdvance ? STORY_CHROME : FILMSTRIP_CHROME}
-                onZoomChange={setZooming}
-              />
+              <ErrorBoundary
+                fallback={() => (
+                  <View style={[styles.pageFallback, { width, height }]}>
+                    <Text style={styles.fallbackText}>Couldn&apos;t show this memory.</Text>
+                  </View>
+                )}>
+                <ViewerPage
+                  item={item}
+                  isCurrent={i === index}
+                  isActive={isActive}
+                  width={width}
+                  height={height}
+                  bottomChrome={tapToAdvance ? STORY_CHROME : FILMSTRIP_CHROME}
+                  onZoomChange={setZooming}
+                />
+              </ErrorBoundary>
             )}
             extraData={index}
             windowSize={3}
@@ -507,6 +514,18 @@ const FilmstripThumb = memo(function FilmstripThumb({ item }: { item: NearbyAsse
 });
 
 const styles = StyleSheet.create({
+  pageFallback: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fallbackText: {
+    fontFamily: DisplayFont,
+    color: Paper,
+    fontSize: 14,
+    textTransform: 'uppercase',
+    textAlign: 'center',
+    paddingHorizontal: 24,
+  },
   backdrop: {
     position: 'absolute',
     top: 0,

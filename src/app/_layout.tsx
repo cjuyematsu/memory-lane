@@ -20,6 +20,7 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import { LoadingPolaroid } from '@/components/brand/loading-polaroid';
+import { ErrorBoundary } from '@/components/error-boundary';
 import { FeedEntryWarmHost } from '@/components/feed/feed-entry-warm-host';
 import { MemoryBanner } from '@/components/notifications/memory-banner';
 import { NearbyMemoriesGreeter } from '@/components/notifications/nearby-memories-greeter';
@@ -114,7 +115,11 @@ export default function RootLayout() {
         {/* Greeter touches location and can pop a banner — keep it out of the
             tree until onboarding is done, alongside the app. */}
         {onboarding === 'done' ? <NearbyMemoriesGreeter /> : null}
-        {ready && onboarding === 'done' ? <Slot /> : null}
+        {ready && onboarding === 'done' ? (
+          <ErrorBoundary>
+            <Slot />
+          </ErrorBoundary>
+        ) : null}
         <MemoryBanner />
         <ShareHost />
         {/* Full-screen first-run onboarding; replaces the app until finished,
