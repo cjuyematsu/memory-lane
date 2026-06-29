@@ -216,10 +216,6 @@ export function Feed({
   // Queue entries whose hidden warm render has finished decoding — shuffle
   // prefers these so rapid presses land on cache hits, not in-flight loads.
   const warmLoadedRef = useRef<Set<string>>(new Set());
-  // Whether the queue holds anything renderable right now (decoded, or
-  // confirmed on-device). The shuffle button stays dimmed without one, so a
-  // press can never land on a photo that needs a download first.
-  const [hasPickableTarget, setHasPickableTarget] = useState(false);
   // One transition at a time: busy from staging a crossfade until BOTH the
   // fade finished and the destination card reported rendered — fade-end alone
   // isn't enough, since the 1500ms timeout forces the fade even when the
