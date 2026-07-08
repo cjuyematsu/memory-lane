@@ -121,13 +121,6 @@ export function RecreationReview({
     }
   };
 
-  // Brief "Saved" beat on the button, then close the whole flow.
-  useEffect(() => {
-    if (saveState !== 'saved') return;
-    const t = setTimeout(onDone, 700);
-    return () => clearTimeout(t);
-  }, [saveState, onDone]);
-
   return (
     <View style={styles.root}>
       <SafeAreaView style={styles.topBar} pointerEvents="box-none">
@@ -144,7 +137,12 @@ export function RecreationReview({
             thenCreationTime={creationTime}
             distanceM={photo.distanceM}
             primary={primary}
-            onSwap={() => setPrimary((p) => (p === 'now' ? 'then' : 'now'))}
+            onSwap={() => {
+              setPrimary((p) => (p === 'now' ? 'then' : 'now'));
+              // The review stays open after a save; changing what would ship
+              // re-arms Save so the new variant can be saved too.
+              if (saveState === 'saved') setSaveState('idle');
+            }}
             showInset={mode === 'both'}
             tone="dark"
           />
@@ -156,7 +154,10 @@ export function RecreationReview({
           <View style={styles.modeToggle}>
             <Pressable
               style={[styles.modeOption, mode === 'both' && styles.modeOptionOn]}
-              onPress={() => setMode('both')}
+              onPress={() => {
+                setMode('both');
+                if (saveState === 'saved') setSaveState('idle');
+              }}
               hitSlop={6}>
               <Text style={[styles.modeLabel, mode === 'both' && styles.modeLabelOn]}>
                 Both
@@ -164,7 +165,10 @@ export function RecreationReview({
             </Pressable>
             <Pressable
               style={[styles.modeOption, mode === 'today' && styles.modeOptionOn]}
-              onPress={() => setMode('today')}
+              onPress={() => {
+                setMode('today');
+                if (saveState === 'saved') setSaveState('idle');
+              }}
               hitSlop={6}>
               <Text style={[styles.modeLabel, mode === 'today' && styles.modeLabelOn]}>
                 Today

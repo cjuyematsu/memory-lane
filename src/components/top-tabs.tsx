@@ -301,7 +301,9 @@ const styles = StyleSheet.create({
   labelActive: {
     textDecorationLine: 'underline',
   },
-  // Above the tab bar (barWrap zIndex 10) and every pane overlay.
+  // Above the tab bar (barWrap zIndex 10) and every pane overlay. No background
+  // here: the gallery owns its opaque Paper root and slides it up/down, so this
+  // wrapper must stay transparent for the vacated area to reveal the tabs.
   galleryOverlay: {
     position: 'absolute',
     top: 0,
@@ -309,7 +311,6 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     zIndex: 30,
-    backgroundColor: Paper,
   },
   backWrap: {
     position: 'absolute',
