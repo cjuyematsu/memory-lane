@@ -7,6 +7,7 @@ import { type Asset } from 'expo-media-library';
 import { DisplayFont, Ink, Letterbox, Paper, PhotoRatio } from '@/constants/theme';
 import { useAssetMetadata } from '@/hooks/use-asset-metadata';
 import { useReverseGeocode } from '@/hooks/use-reverse-geocode';
+import { isPlaceholderLoad } from '@/lib/image-load-event';
 import { computeShareFrame, SHARE_LAYOUT, STORY_CANVAS } from '@/lib/share-memory';
 import { formatTimeAgo } from '@/utils/time-ago';
 
@@ -91,7 +92,12 @@ export const ShareCard = forwardRef<View, { asset: Asset; onReady: () => void }>
             onLoad={(e) => {
               const { width: w, height: h } = e.source ?? {};
               if (w && h) setIsLandscape(w > h);
-              setImageLoaded(true);
+              // Only a FINAL delivery is capture-worthy: the patched
+              // opportunistic ph:// load fires onLoad for the degraded blurred
+              // placeholder first, and capturing that ships a blurry export.
+              // A failed final falls back to a sharp local rendition (final),
+              // so this can't hang; a true dead end hits the host's timeout.
+              if (!isPlaceholderLoad(e)) setImageLoaded(true);
             }}
             onError={() => setImageLoaded(true)}
           />

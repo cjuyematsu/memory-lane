@@ -18,13 +18,40 @@ export type ShareOption = {
   label: string;
 };
 
-// The asset to share plus what the caller already knows about it (its media
-// type — known synchronously at every call site, so the host needn't re-read
-// it just to pick chooser options). null = nothing pending (host renders null).
-export type ShareTarget = {
-  asset: Asset;
-  isVideo: boolean;
+// Which photo fills the BeReal-style composite; the other becomes the small
+// corner inset. The user flips it by tapping the inset (review + viewer), and
+// whatever arrangement is showing is what gets shared.
+export type ThenNowPrimary = 'then' | 'now';
+
+// The two composite exports: 'clean' is the photo itself (inset + a small
+// on-photo date/distance chip, no canvas) — the default; 'framed' is the
+// app's white story canvas with the date/place caption, like the feed card.
+export type ThenNowVariant = 'clean' | 'framed';
+
+// A recreation's then/now pair, as plain persistable data rather than a live
+// `Asset`: the gallery re-shares recreations after metadata caches are cold
+// and even after the library asset was deleted, so the card's captions must
+// come from these fields, never from a metadata hook.
+export type ThenNowShare = {
+  oldAssetId: string; // ph:// / content:// — render-only (may no longer exist)
+  newPhotoUri: string; // file:// of the retaken photo
+  oldCreationTime: number | null;
+  oldLocation: { latitude: number; longitude: number } | null;
+  primary: ThenNowPrimary;
+  // How far from the original spot the retake was captured (haversine at
+  // shutter time), when both fixes were available.
+  capturedDistanceM: number | null;
 };
+
+// What the ShareHost is being asked to share. 'asset' is a library item plus
+// what the caller already knows about it (its media type — known synchronously
+// at every call site, so the host needn't re-read it just to pick chooser
+// options). 'thenNow' is a recreation pair; it has no raw variant, so the host
+// skips the chooser and goes straight to the framed capture.
+// null = nothing pending (host renders null).
+export type ShareTarget =
+  | { kind: 'asset'; asset: Asset; isVideo: boolean }
+  | { kind: 'thenNow'; thenNow: ThenNowShare };
 
 let target: ShareTarget | null = null;
 const subscribers = new Set<() => void>();
@@ -34,7 +61,12 @@ function notify() {
 }
 
 export function requestShare(asset: Asset, isVideo: boolean): void {
-  target = { asset, isVideo };
+  target = { kind: 'asset', asset, isVideo };
+  notify();
+}
+
+export function requestThenNowShare(thenNow: ThenNowShare): void {
+  target = { kind: 'thenNow', thenNow };
   notify();
 }
 
@@ -66,6 +98,19 @@ export function shareOptionsFor(isVideo: boolean): ShareOption[] {
   return [
     { mode: 'raw', label: 'Share photo' },
     { mode: 'framed', label: 'Share with caption' },
+  ];
+}
+
+export type ThenNowOption = {
+  variant: ThenNowVariant;
+  label: string;
+};
+
+// The clean photo-only composite leads — it's the default artifact.
+export function thenNowShareOptions(): ThenNowOption[] {
+  return [
+    { variant: 'clean', label: 'Share photo' },
+    { variant: 'framed', label: 'Share with caption' },
   ];
 }
 
@@ -143,6 +188,37 @@ export function computeShareFrame(
     frameW = frameH * r;
   }
   return { frameW, frameH, cropped };
+}
+
+// ── Then/now (recreation) export composition ─────────────────────────────────
+//
+// BeReal-style: ONE big PhotoRatio frame (sized exactly like the single-photo
+// ShareCard, via computeShareFrame + SHARE_LAYOUT) with the other photo as a
+// small white-bordered inset in its top-left corner. All inset metrics are
+// fractions of the big frame's width so the composition is identical on the
+// export canvas and in the on-screen preview, whatever their sizes.
+export const THEN_NOW_INSET = {
+  widthFrac: 0.34, // inset width as a fraction of the big frame width
+  marginFrac: 0.04, // inset offset from the frame's top/left edges
+  borderFrac: 0.008, // white border around the inset
+  radiusFrac: 0.035, // inset corner radius
+} as const;
+
+// The inset rectangle for a big frame of the given width. The inset is always
+// a portrait PhotoRatio box (matching the app's frame shape) with its content
+// cover-cropped. Pure — unit-tested.
+export function computeThenNowInset(
+  frameW: number,
+  ratio: number
+): { width: number; height: number; margin: number; border: number; radius: number } {
+  const width = frameW * THEN_NOW_INSET.widthFrac;
+  return {
+    width,
+    height: width / ratio,
+    margin: frameW * THEN_NOW_INSET.marginFrac,
+    border: Math.max(1, frameW * THEN_NOW_INSET.borderFrac),
+    radius: frameW * THEN_NOW_INSET.radiusFrac,
+  };
 }
 
 // The lowercased extension of a path or filename (no leading dot), or undefined

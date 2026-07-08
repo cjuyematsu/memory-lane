@@ -1,5 +1,6 @@
 import {
   computeShareFrame,
+  computeThenNowInset,
   MIN_FRAME_RATIO,
   mimeTypeForFilename,
   RAW_SHARE_TIMEOUT_MS,
@@ -8,6 +9,7 @@ import {
   ShareTimeoutError,
   shareExtension,
   shareOptionsFor,
+  THEN_NOW_INSET,
   withTimeout,
 } from '@/lib/share-memory';
 
@@ -81,6 +83,38 @@ describe('computeShareFrame', () => {
       expect(frameW).toBeLessThanOrEqual(a.w + 0.001);
       expect(frameH).toBeLessThanOrEqual(a.h + 0.001);
     }
+  });
+});
+
+describe('computeThenNowInset', () => {
+  const RATIO = 0.75; // the feed's PhotoRatio
+
+  it('is a portrait PhotoRatio box scaled off the frame width', () => {
+    const { width, height } = computeThenNowInset(373, RATIO);
+    expect(width).toBeCloseTo(373 * THEN_NOW_INSET.widthFrac);
+    expect(width / height).toBeCloseTo(RATIO);
+  });
+
+  it('fits inside the big frame with its margin on every plausible frame size', () => {
+    for (const frameW of [120, 373, 1026]) {
+      const frameH = frameW / RATIO;
+      const inset = computeThenNowInset(frameW, RATIO);
+      expect(inset.margin + inset.width).toBeLessThan(frameW);
+      expect(inset.margin + inset.height).toBeLessThan(frameH);
+      expect(inset.radius).toBeGreaterThan(0);
+    }
+  });
+
+  it('never lets the border collapse below a hairline on tiny previews', () => {
+    expect(computeThenNowInset(40, RATIO).border).toBeGreaterThanOrEqual(1);
+  });
+
+  it('scales all metrics linearly with the frame width', () => {
+    const a = computeThenNowInset(200, RATIO);
+    const b = computeThenNowInset(400, RATIO);
+    expect(b.width).toBeCloseTo(a.width * 2);
+    expect(b.margin).toBeCloseTo(a.margin * 2);
+    expect(b.radius).toBeCloseTo(a.radius * 2);
   });
 });
 

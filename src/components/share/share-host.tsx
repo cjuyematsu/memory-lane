@@ -13,6 +13,7 @@ import { captureRef } from 'react-native-view-shot';
 import { type Asset } from 'expo-media-library';
 
 import { ShareCard } from '@/components/share/share-card';
+import { ThenNowCard } from '@/components/share/then-now-card';
 import { DisplayFont, Ink, Paper } from '@/constants/theme';
 import {
   closeShare,
@@ -21,26 +22,34 @@ import {
   shareFile,
   shareOptionsFor,
   ShareTimeoutError,
+  thenNowShareOptions,
   useShareTarget,
   withTimeout,
   type ShareMode,
   type ShareTarget,
+  type ThenNowShare,
+  type ThenNowVariant,
 } from '@/lib/share-memory';
 
 // If the export card's photo never decodes (e.g. a hung iCloud download), don't
 // leave the user staring at the spinner — bail out after this.
 const CAPTURE_TIMEOUT_MS = 8000;
 
+// What the off-screen capture is rendering: a single-asset ShareCard, or a
+// then/now composite in one of its two variants.
+type FramedJob =
+  | { kind: 'asset'; asset: Asset }
+  | { kind: 'thenNow'; thenNow: ThenNowShare; variant: ThenNowVariant };
+
 // Renderless global overlay (mounted once in app/_layout.tsx). Subscribes to the
 // share pub/sub and drives both flows: a themed chooser, then either a raw
-// file share or an off-screen ShareCard capture. Mirrors the pattern of
+// file share or an off-screen card capture. Mirrors the pattern of
 // MemoryBanner / NotificationOrchestrator.
 export function ShareHost() {
   const target = useShareTarget();
   const [phase, setPhase] = useState<'choosing' | 'working'>('choosing');
-  // The asset whose framed export is being captured (null = raw share or none).
-  // The framed export always uses the 9:16 STORY_CANVAS (see ShareCard).
-  const [framedAsset, setFramedAsset] = useState<Asset | null>(null);
+  // The job whose framed export is being captured (null = raw share or none).
+  const [framed, setFramed] = useState<FramedJob | null>(null);
   const cardRef = useRef<View>(null);
   const captured = useRef(false);
   // Previous request, tracked in state so the reset below is a pure
@@ -78,17 +87,27 @@ export function ShareHost() {
 
   const choose = useCallback(
     (mode: ShareMode) => {
-      if (!target) return;
+      if (!target || target.kind !== 'asset') return;
       captured.current = false;
       setPhase('working');
       if (mode === 'raw') {
         void shareRaw(target.asset, target.isVideo);
       } else {
         // Mount the off-screen ShareCard; capture fires from its onReady.
-        setFramedAsset(target.asset);
+        setFramed({ kind: 'asset', asset: target.asset });
       }
     },
     [target, shareRaw]
+  );
+
+  const chooseThenNow = useCallback(
+    (variant: ThenNowVariant) => {
+      if (!target || target.kind !== 'thenNow') return;
+      captured.current = false;
+      setPhase('working');
+      setFramed({ kind: 'thenNow', thenNow: target.thenNow, variant });
+    },
+    [target]
   );
 
   const captureFramed = useCallback(async () => {
@@ -109,7 +128,7 @@ export function ShareHost() {
 
   // Safety net: if the framed card never reports ready, don't hang the spinner.
   useEffect(() => {
-    if (!framedAsset) return;
+    if (!framed) return;
     const t = setTimeout(() => {
       if (!captured.current) {
         captured.current = true;
@@ -117,22 +136,28 @@ export function ShareHost() {
       }
     }, CAPTURE_TIMEOUT_MS);
     return () => clearTimeout(t);
-  }, [framedAsset, fail]);
+  }, [framed, fail]);
 
-  // Reset per request (target identity changes on every requestShare). Adjusted
+  // Belt-and-braces re-arm of the capture dedupe on every new request (the
+  // choose callbacks reset it too). Ref writes belong in effects, not render;
+  // this runs before any card can report ready (readiness needs post-mount
+  // native load events).
+  useEffect(() => {
+    captured.current = false;
+  }, [target]);
+
+  // Reset per request (target identity changes on every request). Adjusted
   // during render — React's supported "reset state when a prop changes" pattern
   // (guarded + self-terminating) — rather than a setState-in-effect, which trips
-  // react-hooks/set-state-in-effect under React 19. The capture-dedupe ref is
-  // reset in `choose` instead (ref writes aren't allowed during render).
+  // react-hooks/set-state-in-effect under React 19. Both kinds open on the
+  // chooser: assets pick raw vs framed, then/now pairs pick clean vs framed.
   if (target !== prevTarget) {
     setPrevTarget(target);
     if (phase !== 'choosing') setPhase('choosing');
-    if (framedAsset !== null) setFramedAsset(null);
+    if (framed !== null) setFramed(null);
   }
 
   if (!target) return null;
-
-  const options = shareOptionsFor(target.isVideo);
 
   return (
     <>
@@ -145,14 +170,23 @@ export function ShareHost() {
         {phase === 'choosing' ? (
           <Pressable style={styles.backdrop} onPress={closeShare}>
             <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
-              {options.map((opt) => (
-                <Pressable
-                  key={opt.mode}
-                  style={styles.option}
-                  onPress={() => choose(opt.mode)}>
-                  <Text style={styles.optionLabel}>{opt.label}</Text>
-                </Pressable>
-              ))}
+              {target.kind === 'asset'
+                ? shareOptionsFor(target.isVideo).map((opt) => (
+                    <Pressable
+                      key={opt.mode}
+                      style={styles.option}
+                      onPress={() => choose(opt.mode)}>
+                      <Text style={styles.optionLabel}>{opt.label}</Text>
+                    </Pressable>
+                  ))
+                : thenNowShareOptions().map((opt) => (
+                    <Pressable
+                      key={opt.variant}
+                      style={styles.option}
+                      onPress={() => chooseThenNow(opt.variant)}>
+                      <Text style={styles.optionLabel}>{opt.label}</Text>
+                    </Pressable>
+                  ))}
               <Pressable style={styles.cancel} onPress={closeShare} hitSlop={8}>
                 <Text style={styles.cancelLabel}>Cancel</Text>
               </Pressable>
@@ -171,9 +205,18 @@ export function ShareHost() {
       {/* Off-screen export view (only for the framed flow). Positioned far
           off-screen but fully laid out and OPAQUE — view-shot captures blank
           from an opacity:0 / display:none ancestor, so don't hide it that way. */}
-      {framedAsset ? (
+      {framed ? (
         <View style={styles.offscreen} pointerEvents="none">
-          <ShareCard ref={cardRef} asset={framedAsset} onReady={captureFramed} />
+          {framed.kind === 'asset' ? (
+            <ShareCard ref={cardRef} asset={framed.asset} onReady={captureFramed} />
+          ) : (
+            <ThenNowCard
+              ref={cardRef}
+              thenNow={framed.thenNow}
+              variant={framed.variant}
+              onReady={captureFramed}
+            />
+          )}
         </View>
       ) : null}
     </>
