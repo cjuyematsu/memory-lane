@@ -12,11 +12,24 @@ export const ICLOUD_ACCESS_HINT_MS = 2500;
  *  Retry / Find one on device) instead of spinning. */
 export const ICLOUD_LOAD_DEADLINE_MS = 12000;
 
+// ── Hidden background downloads (never user-visible) ───────────────────────
+/** Cap on the warm layer's single in-flight iCloud download; past this the
+ *  entry is dropped so one stuck download can't block the rotation all session. */
+export const WARM_PENDING_DOWNLOAD_MS = 20000;
+/** Same cap for the old-memory trickle's hidden download slot. */
+export const OLD_MEMORY_DOWNLOAD_CAP_MS = 20000;
+/** After a warm download FAILS, hold off mounting the next pending cloud entry
+ *  this long. Fast failures (offline, storage-full) would otherwise loop
+ *  mount→error→drop→refill against the Photos framework all session. */
+export const WARM_FAILURE_PAUSE_MS = 30000;
+
 // ── Entry selection (first photo on cold launch) ────────────────────────────
 /** Per-candidate iCloud probe; a slow probe is treated as offloaded and skipped. */
 export const ENTRY_PROBE_MS = 2500;
 /** Whole entry-selection deadline; if nothing committed, open the newest photo. */
 export const ENTRY_SELECT_DEADLINE_MS = 5000;
+/** "Find one on device" forward-probe budget (user is waiting on the button). */
+export const FIND_ON_DEVICE_SCAN_MS = 4000;
 
 // ── Cold-start system calls ─────────────────────────────────────────────────
 export const MEDIA_PERMISSION_MS = 6000;

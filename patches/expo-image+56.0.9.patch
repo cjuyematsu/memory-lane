@@ -1,5 +1,5 @@
 diff --git a/node_modules/expo-image/ios/ImageView.swift b/node_modules/expo-image/ios/ImageView.swift
-index cccedd7..13311e8 100644
+index cccedd7..2ccd3fc 100644
 --- a/node_modules/expo-image/ios/ImageView.swift
 +++ b/node_modules/expo-image/ios/ImageView.swift
 @@ -253,7 +253,14 @@ public final class ImageView: ExpoView {
@@ -18,7 +18,18 @@ index cccedd7..13311e8 100644
        log.debug("Loading the image has been canceled")
        return
      }
-@@ -509,7 +516,15 @@ public final class ImageView: ExpoView {
+@@ -261,6 +268,10 @@ public final class ImageView: ExpoView {
+     if let image {
+       onLoad([
+         "cacheType": cacheTypeToString(cacheType),
++        // PastPic patch: lets JS tell the degraded opportunistic delivery (the
++        // fast blurred placeholder, finished=false) apart from the final image —
++        // recovery timers and warm-queue accounting must only settle on the final.
++        "isPlaceholder": !finished,
+         "source": [
+           "url": imageUrl?.absoluteString,
+           "width": image.size.width,
+@@ -509,7 +520,15 @@ public final class ImageView: ExpoView {
      // For SF Symbol replace effect, skip the UIView transition and let the native symbol animation handle it
      let isSFReplaceEffect = transition?.effect.isSFReplaceEffect == true && isSFSymbolSource
  
@@ -36,7 +47,7 @@ index cccedd7..13311e8 100644
        let seconds = transition.duration / 1000
  
 diff --git a/node_modules/expo-image/ios/Loaders/PhotoLibraryAssetLoader.swift b/node_modules/expo-image/ios/Loaders/PhotoLibraryAssetLoader.swift
-index a3c15e7..f08376e 100644
+index a3c15e7..241da57 100644
 --- a/node_modules/expo-image/ios/Loaders/PhotoLibraryAssetLoader.swift
 +++ b/node_modules/expo-image/ios/Loaders/PhotoLibraryAssetLoader.swift
 @@ -1,5 +1,6 @@
@@ -67,7 +78,7 @@ index a3c15e7..f08376e 100644
    options.normalizedCropRect = .zero
    options.isNetworkAccessAllowed = true
  
-@@ -130,11 +141,44 @@ private func requestAsset(
+@@ -130,11 +141,121 @@ private func requestAsset(
        // This value can be `true` only when network access is allowed and the photo is stored in the iCloud.
        let isDegraded: Bool = info?[PHImageResultIsDegradedKey] as? Bool ?? false
  
@@ -80,7 +91,84 @@ index a3c15e7..f08376e 100644
 +      // this intermediate image.
 +      let delivered = isDegraded ? image.map(blurredPlaceholder) : image
 +
++      // PastPic patch: a FINAL delivery with no image means the iCloud download
++      // failed (offline, or no disk headroom on a full phone). Apple Photos
++      // keeps working in that state by showing the locally-stored rendition —
++      // and PhotoKit hands third-party apps those same renditions, so do the
++      // same: request the best LOCAL image (no network) and deliver it SHARP as
++      // the final. Only when nothing local exists does a real error surface, so
++      // JS gets onError instead of total silence (previously neither onLoad nor
++      // onError fired and only a JS deadline timer could recover). A cancelled
++      // request stays silent: it fires when a recycled/re-sourced view tears down
++      // its old request, and erroring it would mark the NEW asset unreachable.
++      // A nil degraded delivery still falls through and is dropped by ImageView.
++      if delivered == nil && !isDegraded {
++        let isCancelled = info?[PHImageCancelledKey] as? Bool ?? false
++        guard !isCancelled else {
++          return
++        }
++        requestBestLocalImage(asset, targetSize: targetSize) { localImage in
++          if let localImage {
++            completedBlock?(localImage, nil, nil, true)
++            return
++          }
++          let error = (info?[PHImageErrorKey] as? NSError)
++            ?? NSError(
++              domain: "expo.modules.image.PhotoLibraryAssetLoader",
++              code: 1,
++              userInfo: [NSLocalizedDescriptionKey: "PHImageManager returned no image"]
++            )
++          completedBlock?(nil, nil, error, true)
++        }
++        return
++      }
++
 +      completedBlock?(delivered, nil, nil, !isDegraded)
++    }
++  )
++}
++
++// PastPic patch: the best locally-available rendition of an asset, without
++// touching the network — the fallback when downloading the original failed
++// (full disk / offline). "Optimize iPhone Storage" keeps a device-sized version
++// of most assets, and every asset has at least a thumbnail in the local library
++// database, so this almost always yields something — the same image Apple
++// Photos shows in that state. Opportunistic (not .highQualityFormat, which can
++// return nil for offloaded assets when network is off): take the FIRST non-nil
++// delivery — for a local-only request that's the largest rendition on device —
++// and treat a nil FINAL delivery as "nothing local at all".
++private func requestBestLocalImage(
++  _ asset: PHAsset,
++  targetSize: CGSize,
++  completion: @escaping (UIImage?) -> Void
++) {
++  let options = PHImageRequestOptions()
++  options.isSynchronous = false
++  options.version = .current
++  options.deliveryMode = .opportunistic
++  options.resizeMode = .exact
++  options.normalizedCropRect = .zero
++  options.isNetworkAccessAllowed = false
++
++  var done = false
++  PHImageManager.default().requestImage(
++    for: asset,
++    targetSize: targetSize,
++    contentMode: .aspectFit,
++    options: options,
++    resultHandler: { image, info in
++      // PHImageManager invokes result handlers serially, so the flag is safe.
++      if done {
++        return
++      }
++      let isDegraded: Bool = info?[PHImageResultIsDegradedKey] as? Bool ?? false
++      if let image {
++        done = true
++        completion(image)
++      } else if !isDegraded {
++        done = true
++        completion(nil)
++      }
      }
    )
  }

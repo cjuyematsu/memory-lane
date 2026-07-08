@@ -1,4 +1,4 @@
-import { memo, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { memo, useContext, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, {
   useAnimatedStyle,
@@ -15,10 +15,9 @@ import { PhotoFrame, type FrameLayout } from '@/components/feed/photo-frame';
 import { PinchZoom } from '@/components/pinch-zoom';
 import { DisplayFont, FrameMargin, Ink, Paper } from '@/constants/theme';
 import { useAssetMetadata, usePlaybackUri } from '@/hooks/use-asset-metadata';
+import { useIcloudImageLoad } from '@/hooks/use-icloud-image-load';
 import { useReverseGeocode } from '@/hooks/use-reverse-geocode';
 import { getAssetRatio, setAssetRatio } from '@/lib/asset-ratio-cache';
-import { isOnline } from '@/lib/connectivity';
-import { ICLOUD_ACCESS_HINT_MS, ICLOUD_LOAD_DEADLINE_MS } from '@/lib/loading-timeouts';
 import { formatTimeAgo } from '@/utils/time-ago';
 
 const PLACE_TIMEOUT_MS = 1500;
@@ -62,19 +61,30 @@ export const FeedCard = memo(function FeedCard({
   // out" without a state reset in the effect body.
   const [timedOutId, setTimedOutId] = useState<string | null>(null);
   const placeTimedOut = timedOutId === asset.id;
-  const [imageReady, setImageReady] = useState(false);
   const [safetyVisible, setSafetyVisible] = useState(false);
-  // Load phase, all keyed by asset id (like timedOutId) so a recycled card
-  // re-derives a fresh state without a setState in the effect body:
-  //  - accessing:   waited past the hint while online → "Accessing from iCloud…"
-  //  - unreachable: offline, or past the hard deadline → drop the image (frees
-  //                 the held native fetch) and offer Retry / Find one on device.
-  const [accessingId, setAccessingId] = useState<string | null>(null);
-  const [unreachableId, setUnreachableId] = useState<string | null>(null);
-  // Bumping this remounts the <Image> (via `key`) for a fresh load attempt.
-  const [reloadNonce, setReloadNonce] = useState(0);
-  const accessing = accessingId === asset.id && !imageReady;
-  const unreachable = unreachableId === asset.id && !imageReady;
+  // Shared bounded-load machine (preview/accessing/unreachable + Retry), same as
+  // the Near Me grid/viewer. Timers run only while this is the card the user is
+  // actually looking at — the 12s deadline measures the user's wait, not how
+  // long an off-screen ±2 neighbor has been mounted at low priority.
+  const load = useIcloudImageLoad(asset.id, { enabled: isCurrent && isActive });
+  const accessingLabel =
+    load.progressPct != null
+      ? `Accessing from iCloud… ${load.progressPct}%`
+      : 'Accessing from iCloud…';
+  // "Find one on device" progress/result, keyed by asset id (recycle-safe like
+  // the rest): 'searching' while the feed probes forward, 'none' when the
+  // bounded scan confirmed nothing local — an honest answer instead of the old
+  // silently-dead button on a fully-offloaded library.
+  const [findState, setFindState] = useState<{
+    id: string;
+    phase: 'searching' | 'none';
+  } | null>(null);
+  const findPhase = findState?.id === asset.id ? findState.phase : null;
+  const handleFindOnDevice = async () => {
+    setFindState({ id: asset.id, phase: 'searching' });
+    const found = await onFindOnDevice(asset.id);
+    setFindState(found ? null : { id: asset.id, phase: 'none' });
+  };
   // Landscape photos are letterboxed (contain) on #000; everything else fills
   // the 3:4 frame (cover). The Asset has no dims, so we SEED orientation from the
   // shared ratio cache (populated as photos load here + in the Near Me grid) — a
@@ -96,53 +106,20 @@ export const FeedCard = memo(function FeedCard({
   const overlayReady =
     meta != null && (meta.location == null || placeName != null || placeTimedOut);
 
-  // Show the photo as soon as its image is ready — never block visibility on
-  // caption metadata. getInfo()/getMediaType() can throw or hang on Android,
-  // and gating the whole card on that left it stuck at opacity 0 = a fully
-  // white screen. The caption below fades in independently via overlayReady.
-  const visible = imageReady || safetyVisible;
+  // Show the photo as soon as anything renders in it (the blurred preview
+  // counts — it IS a visible photo) — never block visibility on caption
+  // metadata. getInfo()/getMediaType() can throw or hang on Android, and gating
+  // the whole card on that left it stuck at opacity 0 = a fully white screen.
+  // The caption below fades in independently via overlayReady.
+  const visible = load.showing || safetyVisible;
 
   // Safety net: if the image reports neither load nor error, reveal the card
   // anyway so it can't hang white.
   useEffect(() => {
-    if (imageReady) return;
+    if (load.showing) return;
     const t = setTimeout(() => setSafetyVisible(true), CARD_VISIBLE_TIMEOUT_MS);
     return () => clearTimeout(t);
-  }, [imageReady]);
-
-  // Past the hint mark and still loading: if the phone is offline there's no
-  // point waiting out the deadline — fail straight to unreachable. Otherwise
-  // surface "Accessing from iCloud…" so the wait reads as working, not frozen.
-  // Re-armed by reloadNonce so a retry restarts the clock.
-  useEffect(() => {
-    if (imageReady) return;
-    let cancelled = false;
-    const t = setTimeout(async () => {
-      const online = await isOnline();
-      if (cancelled) return;
-      if (online) setAccessingId(asset.id);
-      else setUnreachableId(asset.id);
-    }, ICLOUD_ACCESS_HINT_MS);
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
-    };
-  }, [imageReady, asset.id, reloadNonce]);
-
-  // Hard ceiling: a fetch that never lands becomes unreachable so a card can
-  // never spin forever (the bug behind the endless "Loading from iCloud…").
-  useEffect(() => {
-    if (imageReady) return;
-    const t = setTimeout(() => setUnreachableId(asset.id), ICLOUD_LOAD_DEADLINE_MS);
-    return () => clearTimeout(t);
-  }, [imageReady, asset.id, reloadNonce]);
-
-  const handleRetry = useCallback(() => {
-    setUnreachableId((id) => (id === asset.id ? null : id));
-    setAccessingId((id) => (id === asset.id ? null : id));
-    setImageReady(false);
-    setReloadNonce((n) => n + 1);
-  }, [asset.id]);
+  }, [load.showing]);
 
   const opacity = useSharedValue(0);
   const opacityStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
@@ -163,13 +140,17 @@ export const FeedCard = memo(function FeedCard({
 
   // Announce readiness only as the current card (re-announcing when becoming
   // current, since a shuffle can land on an already-loaded card whose state
-  // never flips again), and only on a real image result (load or error) — not
-  // on the safety-visibility timeout. The feed holds its crossfade overlay
-  // and the shuffle gate on this signal; announcing a bare frame made the
-  // overlay reveal exactly that.
+  // never flips again), and only on a real image result — not on the
+  // safety-visibility timeout. The feed holds its crossfade overlay and the
+  // shuffle gate on this signal; announcing a bare frame made the overlay
+  // reveal exactly that. The blurred preview counts (a real photo is showing —
+  // holding the crossfade for the full iCloud download would reintroduce
+  // multi-second shuffles), and so does `unreachable` (the recovery UI is the
+  // card's final answer; the gate must still release).
+  const announceReady = (load.showing || load.unreachable) && isCurrent;
   useEffect(() => {
-    if (imageReady && isCurrent) onCardReady(asset.id);
-  }, [imageReady, isCurrent, onCardReady, asset.id]);
+    if (announceReady) onCardReady(asset.id);
+  }, [announceReady, onCardReady, asset.id]);
 
   const captionTop = frame.top + frame.height + 24;
 
@@ -177,11 +158,11 @@ export const FeedCard = memo(function FeedCard({
     <Animated.View style={[styles.container, { width, height }, opacityStyle]}>
       <PhotoFrame top={frame.top} left={frame.left} width={frame.width} height={frame.height}>
         <PinchZoom onActiveChange={onZoomChange}>
-          {thumbnailUri && !unreachable ? (
+          {thumbnailUri && !(load.unreachable && !load.preview) ? (
             <Image
               // The nonce remounts the image for a fresh fetch when the user
               // taps retry (re-issuing usually lands fast on cached progress).
-              key={`${asset.id}:${reloadNonce}`}
+              key={`${asset.id}:${load.reloadNonce}`}
               source={{ uri: thumbnailUri }}
               style={StyleSheet.absoluteFill}
               contentFit={isLandscape ? 'contain' : 'cover'}
@@ -199,42 +180,72 @@ export const FeedCard = memo(function FeedCard({
                 const { width: w, height: h } = e.source ?? {};
                 if (w && h) {
                   // Record the ratio so the shuffle-exit overlay (and later views)
-                  // can seed the right fit and never flash a zoom.
+                  // can seed the right fit and never flash a zoom. The preview
+                  // preserves aspect, so this lands with the blur — the fit is
+                  // right before the full image ever arrives.
                   setAssetRatio(asset.id, w / h);
                   if (w > h) setLoadedLandscapeId(asset.id);
                 }
-                setImageReady(true);
+                load.onLoad(e);
               }}
-              onError={() => setImageReady(true)}
+              onError={load.onError}
+              onProgress={load.onProgress}
             />
           ) : null}
           {isVideo && isCurrent && isActive && playbackUri ? (
             <FeedVideo uri={playbackUri} contain={isLandscape} />
           ) : null}
-          {/* Seen when the safety timeout reveals the card before its image
-              decoded (slow iCloud loads), or when the load gives up entirely. */}
-          {!imageReady ? (
-            unreachable ? (
+          {/* Empty frame (no preview yet): centered spinner while waiting, or the
+              full recovery block when the load gave up with nothing to show. */}
+          {!load.showing ? (
+            load.unreachable ? (
               <View style={styles.loading}>
-                <Text style={styles.loadingText}>Photo couldn&apos;t load</Text>
-                <Pressable onPress={handleRetry} hitSlop={12} style={styles.retryButton}>
+                <Text style={styles.loadingText}>
+                  {load.storageFull ? 'iPhone storage is full' : 'Photo couldn’t load'}
+                </Text>
+                {load.storageFull ? (
+                  <Text style={styles.loadingSubtext}>
+                    Free up space to load iCloud photos
+                  </Text>
+                ) : null}
+                <Pressable onPress={load.retry} hitSlop={12} style={styles.retryButton}>
                   <Text style={styles.retryLabel}>Retry</Text>
                 </Pressable>
                 <Pressable
-                  onPress={() => onFindOnDevice(asset.id)}
+                  onPress={handleFindOnDevice}
+                  disabled={findPhase !== null}
                   hitSlop={12}
-                  style={styles.retryButton}>
-                  <Text style={styles.retryLabel}>Find one on device</Text>
+                  style={[styles.retryButton, findPhase !== null && styles.retryButtonDim]}>
+                  <Text style={styles.retryLabel}>
+                    {findPhase === 'searching'
+                      ? 'Searching…'
+                      : findPhase === 'none'
+                        ? 'None on device'
+                        : 'Find one on device'}
+                  </Text>
                 </Pressable>
               </View>
             ) : (
               <View style={styles.loading} pointerEvents="none">
                 <ActivityIndicator color={Paper} />
-                {accessing ? (
-                  <Text style={styles.loadingText}>Accessing from iCloud…</Text>
+                {load.accessing ? (
+                  <Text style={styles.loadingText}>{accessingLabel}</Text>
                 ) : null}
               </View>
             )
+          ) : null}
+          {/* Blurred preview showing, full image still on its way: a compact pill
+              instead of a full-frame overlay — the blur is already a photo. Past
+              the deadline it becomes Retry (the image stays mounted; the live
+              native request can still complete and dissolve the pill away). */}
+          {load.preview && load.unreachable ? (
+            <Pressable onPress={load.retry} hitSlop={12} style={styles.pill}>
+              <Text style={styles.pillText}>Retry</Text>
+            </Pressable>
+          ) : load.preview && load.accessing ? (
+            <View style={styles.pill} pointerEvents="none">
+              <Text style={styles.pillText}>{accessingLabel}</Text>
+            </View>
           ) : null}
         </PinchZoom>
       </PhotoFrame>
@@ -334,6 +345,18 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
     textTransform: 'uppercase',
   },
+  // Second line under the storage-full title; quieter than the title.
+  loadingSubtext: {
+    marginTop: 6,
+    fontFamily: DisplayFont,
+    color: Paper,
+    opacity: 0.75,
+    fontSize: 10,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+    textAlign: 'center',
+    paddingHorizontal: 24,
+  },
   retryButton: {
     marginTop: 16,
     borderWidth: 2,
@@ -341,10 +364,32 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     paddingVertical: 8,
   },
+  // Searching / no-result state of "Find one on device".
+  retryButtonDim: {
+    opacity: 0.5,
+  },
   retryLabel: {
     fontFamily: DisplayFont,
     color: Paper,
     fontSize: 12,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  // Compact hint/Retry pill shown over the blurred preview (bottom-center of the
+  // frame) while the full image is still downloading or has stalled.
+  pill: {
+    position: 'absolute',
+    bottom: 14,
+    alignSelf: 'center',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+  },
+  pillText: {
+    fontFamily: DisplayFont,
+    color: Paper,
+    fontSize: 11,
     letterSpacing: 0.5,
     textTransform: 'uppercase',
   },

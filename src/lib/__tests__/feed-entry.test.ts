@@ -35,4 +35,12 @@ describe('entryCandidateOrder', () => {
     const order = entryCandidateOrder(3, seq([0.99]), 5, 3);
     expect(order).toEqual(expect.arrayContaining([0, 1, 2]));
   });
+
+  it('recentN = 0 yields a random-only order with no appended newest block', () => {
+    // The feed's cold-launch entry uses recentN = 0 so an offloaded library
+    // can never fall through to "always the newest photo". Random picks land
+    // on 90 and 40; nothing else — in particular not 0..N newest — appears.
+    const order = entryCandidateOrder(100, seq([0.9, 0.4]), 4, 0);
+    expect(order).toEqual([90, 40]);
+  });
 });

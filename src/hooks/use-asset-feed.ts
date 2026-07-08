@@ -26,6 +26,20 @@ export type FeedState =
   | { status: 'ready'; assets: Asset[] }
   | { status: 'error'; message: string };
 
+// Ceiling on how much of the library the app sees. The query is newest-first,
+// so anything past the cap silently VANISHES from the entire app — shuffle,
+// Near Me, the located index, geofence notifications ("beta tester with 32k
+// photos only ever saw the last year" was a 10k cap, not a filter). High enough
+// to cover essentially all real libraries; kept finite so a pathological
+// 200k+ library can't blow the 12s query bound (which would error the whole
+// feed) — for those, the newest 60k still work.
+const MAX_LIBRARY_ASSETS = 60000;
+// If materializing the full cap blows the query bound anyway (huge library on
+// a slow device), degrade to the old cap rather than bricking the feed with an
+// error screen the 10k builds never showed. Per-reload, not sticky: the next
+// reload (library change, retry) attempts the full cap again.
+const FALLBACK_LIBRARY_ASSETS = 10000;
+
 const SCREENSHOT_BATCH = 500;
 const screenshotCache = new Map<string, boolean>();
 let screenshotCacheLoaded = false;
@@ -133,23 +147,37 @@ function publishAssets(assets: Asset[]) {
   for (const fn of subscribers) fn(assets);
 }
 
+function queryLibrary(limit: number): Promise<Asset[]> {
+  return new Query()
+    .within(AssetField.MEDIA_TYPE, [MediaType.IMAGE, MediaType.VIDEO])
+    .orderBy({ key: AssetField.CREATION_TIME, ascending: false })
+    .limit(limit)
+    .exe();
+}
+
 async function runReload(): Promise<Asset[]> {
   if (inflightReload) return inflightReload;
   inflightReload = (async () => {
     try {
       // Bound the native query: MediaLibrary's exe() has no timeout, so on a
       // cold/stalled Photos framework an unbounded await would pin the feed on
-      // the loading Polaroid forever. A timeout throws → finally clears the
-      // inflight latch → the caller's retry/error path takes over.
-      const raw = await withTimeout(
-        new Query()
-          .within(AssetField.MEDIA_TYPE, [MediaType.IMAGE, MediaType.VIDEO])
-          .orderBy({ key: AssetField.CREATION_TIME, ascending: false })
-          .limit(10000)
-          .exe(),
-        LIBRARY_QUERY_MS,
-        'library query'
-      );
+      // the loading Polaroid forever. A timeout throws → the smaller fallback
+      // query gets one shot → only if that also fails does the caller's
+      // retry/error path take over (the inflight latch clears in finally).
+      let raw: Asset[];
+      try {
+        raw = await withTimeout(
+          queryLibrary(MAX_LIBRARY_ASSETS),
+          LIBRARY_QUERY_MS,
+          'library query'
+        );
+      } catch {
+        raw = await withTimeout(
+          queryLibrary(FALLBACK_LIBRARY_ASSETS),
+          LIBRARY_QUERY_MS,
+          'library query (fallback cap)'
+        );
+      }
       // Screenshot filtering reads per-asset native subtypes; if it stalls,
       // degrade to the unfiltered list (show everything, maybe a few
       // screenshots) rather than blocking the whole feed.

@@ -59,6 +59,35 @@ export function getCachedMetadata(assetId: string): AssetMetadata | undefined {
   return fullCache.get(assetId);
 }
 
+const mediaTypeCache = new Map<string, MediaType>();
+const mediaTypeInflight = new Map<string, Promise<MediaType>>();
+
+// Cheap PHAsset property read (no resource / CoreMedia access), cached and
+// deduped so the entry/shuffle loops and the iCloud probe below never re-read
+// the same asset. A timeout or thrown read resolves UNKNOWN and is NOT cached,
+// so a real value can still be read once the Photos framework is warm.
+export async function loadAssetMediaType(asset: Asset): Promise<MediaType> {
+  const cached = mediaTypeCache.get(asset.id);
+  if (cached !== undefined) return cached;
+  const existing = mediaTypeInflight.get(asset.id);
+  if (existing) return existing;
+  const p = (async () => {
+    try {
+      const type = await withTimeoutDefault(
+        asset.getMediaType().catch(() => MediaType.UNKNOWN),
+        ENTRY_PROBE_MS,
+        MediaType.UNKNOWN
+      );
+      if (type !== MediaType.UNKNOWN) cappedSet(mediaTypeCache, asset.id, type);
+      return type;
+    } finally {
+      mediaTypeInflight.delete(asset.id);
+    }
+  })();
+  mediaTypeInflight.set(asset.id, p);
+  return p;
+}
+
 const inCloudCache = new Map<string, boolean>();
 const inCloudInflight = new Map<string, Promise<boolean>>();
 
@@ -82,6 +111,32 @@ export async function loadAssetIsInCloud(asset: Asset): Promise<boolean> {
 
   const p = (async () => {
     try {
+      // VIDEO short-circuit: never run the native getIsInCloud probe on a video.
+      // On iOS its video branch requests an AVAsset (PHImageManager.requestAVAsset),
+      // which spins up the CoreMedia/AVPlayer pipeline (PlayerRemoteXPC /
+      // FigPlayerInterstitial / FIGSANDBOX) for EVERY probed video. On a heavily
+      // iCloud-offloaded library the feed's shuffle/entry loops probe many
+      // candidates, so that repeated AVAsset instantiation floods mediaserverd and
+      // crashes the app with no memory warning and no JS/TestFlight crash log. There
+      // is no cheap residency check for a video (any PhotoKit video access touches
+      // AVFoundation), so we skip the probe and treat videos as in-cloud: the feed
+      // then never opens its ENTRY on a video and rate-limits videos in the shuffle,
+      // while still featuring them. This does NOT affect Near Me — the grid/viewer
+      // show and play videos and never call this.
+      const mediaType = await loadAssetMediaType(asset);
+      if (mediaType === MediaType.VIDEO) {
+        cappedSet(inCloudCache, asset.id, true);
+        return true;
+      }
+      // Only a CONFIRMED image may reach the native probe. UNKNOWN means the
+      // type read itself timed out or threw (cold Photos framework — most
+      // likely at launch, exactly when the entry loop probes hardest), so the
+      // asset may still be a video and probing it would be the crash path
+      // above. Guess in-cloud WITHOUT caching (same rule as the probe timeout
+      // below) so a warm framework can still produce a real answer later.
+      if (mediaType !== MediaType.IMAGE) {
+        return true;
+      }
       // A genuine result (including a thrown read → false) is cached. A *timeout*
       // is only a guess: treat a slow probe as offloaded so entry selection skips
       // it, but DON'T cache the guess — a real value can still be read later, and

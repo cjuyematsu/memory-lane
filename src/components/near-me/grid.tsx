@@ -5,9 +5,12 @@ import { FlashList, type FlashListRef, type ListRenderItem } from '@shopify/flas
 import { Image } from 'expo-image';
 import { MediaType } from 'expo-media-library';
 
+import RefreshIcon from '@/assets/icons/refresh.svg';
 import { Ink, Paper } from '@/constants/theme';
+import { useIcloudImageLoad } from '@/hooks/use-icloud-image-load';
 import type { NearbyAsset } from '@/hooks/use-nearby-assets';
 import { setAssetRatio } from '@/lib/asset-ratio-cache';
+import { isStaleLoadEvent } from '@/lib/image-load-event';
 
 const COLUMNS = 3;
 const GAP = 2; // hairline gutter between tiles, like the Photos grid
@@ -54,6 +57,7 @@ export const Grid = memo(function Grid({
   paddingBottom,
   onRefresh,
   refreshing,
+  isActive = true,
 }: {
   items: NearbyAsset[];
   onPressItem: (index: number) => void;
@@ -63,6 +67,12 @@ export const Grid = memo(function Grid({
   // for fresh nearby photos. Forwarded straight to FlashList's RefreshControl.
   onRefresh?: () => void;
   refreshing?: boolean;
+  // Whether the Near Me pane is the one on screen. Both TopTabs panes stay
+  // mounted, so this gates the tiles' stall-recovery timers: while the user
+  // sits on Camera Roll the grid's fetches are deprioritized behind the visible
+  // feed, and an ungated 12s zero-progress deadline would mass-mark background
+  // tiles unreachable (dropping their images) before the user ever looks.
+  isActive?: boolean;
 }) {
   const listRef = useRef<FlashListRef<NearbyAsset>>(null);
   const wasRefreshing = useRef(false);
@@ -94,8 +104,10 @@ export const Grid = memo(function Grid({
   }, [refreshing]);
 
   const renderItem = useCallback<ListRenderItem<NearbyAsset>>(
-    ({ item, index }) => <GridCell item={item} index={index} onPress={onPressItem} />,
-    [onPressItem]
+    ({ item, index }) => (
+      <GridCell item={item} index={index} onPress={onPressItem} isActive={isActive} />
+    ),
+    [onPressItem, isActive]
   );
 
   return (
@@ -133,31 +145,77 @@ const GridCell = memo(function GridCell({
   item,
   index,
   onPress,
+  isActive,
 }: {
   item: NearbyAsset;
   index: number;
   // Stable across renders (the parent passes one callback for the whole grid),
   // so this cell's memo holds and the tile doesn't re-render needlessly.
   onPress: (index: number) => void;
+  isActive: boolean;
 }) {
   const isVideo = item.mediaType === MediaType.VIDEO;
+  // Bounded load so a stalled iCloud thumbnail can't leave the tile black forever
+  // (and keep its native fetch pinned). On `unreachable` we drop the <Image> and
+  // show a tap-to-retry instead. No spinner while loading — a per-tile spinner
+  // would be noisy in a 3-up grid; the gray placeholder is enough. Timers run
+  // only while the pane is on screen (same rule as the feed card / viewer page:
+  // the deadline measures the user's wait, not background time); the load
+  // callbacks always work.
+  const load = useIcloudImageLoad(item.asset.id, { enabled: isActive });
   return (
     <Pressable onPress={() => onPress(index)} style={styles.cell}>
       <View style={styles.cellInner}>
-        <Image
-          source={{ uri: item.asset.id }}
-          style={StyleSheet.absoluteFill}
-          contentFit="cover"
-          cachePolicy="memory-disk"
-          transition={180}
-          // Record the poster's intrinsic ratio (reported regardless of
-          // contentFit) so the viewer can open this asset at its true shape with
-          // no resize snap. Free — the tile decodes the poster anyway.
-          onLoad={(e) => {
-            const { width: w, height: h } = e.source ?? {};
-            if (w && h) setAssetRatio(item.asset.id, w / h);
-          }}
-        />
+        {!(load.unreachable && !load.preview) ? (
+          <>
+            <Image
+              // Nonce-ONLY key (never the asset id): bumping it remounts the
+              // image so Retry re-issues a stalled fetch even while the blurred
+              // preview keeps it mounted. The id must stay out of the key — this
+              // is a recycling list, and an id-keyed element would remount (and
+              // blank) every reassigned cell, undoing the cross-dissolve the
+              // no-recyclingKey design exists for.
+              key={String(load.reloadNonce)}
+              source={{ uri: item.asset.id }}
+              style={StyleSheet.absoluteFill}
+              contentFit="cover"
+              cachePolicy="memory-disk"
+              transition={180}
+              // Record the poster's intrinsic ratio (reported regardless of
+              // contentFit) so the viewer can open this asset at its true shape with
+              // no resize snap. Free — the tile decodes the poster anyway.
+              onLoad={(e) => {
+                // A recycled cell can receive the previous source's late onLoad;
+                // crediting it to this asset would disarm its recovery timers
+                // and record the wrong ratio.
+                if (isStaleLoadEvent(e, item.asset.id)) return;
+                const { width: w, height: h } = e.source ?? {};
+                if (w && h) setAssetRatio(item.asset.id, w / h);
+                load.onLoad(e);
+              }}
+              onError={load.onError}
+              // No visible progress UI in a 3-up grid, but the ticks feed the
+              // stall detector so a slow tile isn't falsely declared dead.
+              onProgress={load.onProgress}
+            />
+            {load.unreachable ? (
+              // Stalled with the blurred preview still showing: keep the photo and
+              // offer a quiet corner retry instead of replacing the tile. The live
+              // request can still complete and clear this on its own.
+              <Pressable onPress={load.retry} style={styles.retryBadge} hitSlop={8}>
+                <RefreshIcon width={12} height={12} fill={Paper} />
+              </Pressable>
+            ) : null}
+          </>
+        ) : (
+          // Stalled fetch with nothing showing, image dropped: a quiet retry glyph
+          // on the placeholder tile. Its own Pressable wins the touch over the
+          // cell-open Pressable, and tapping re-mounts the <Image> above for a
+          // fresh attempt.
+          <Pressable onPress={load.retry} style={styles.retryTile} hitSlop={6}>
+            <RefreshIcon width={20} height={20} fill={Ink} />
+          </Pressable>
+        )}
         {isVideo ? (
           // Subtle corner cue: a small white play triangle with a soft dark
           // underlay (legible over bright photos) instead of a big centered
@@ -194,6 +252,30 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     backgroundColor: '#E9E9E9',
     overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // Fills the tile when a stalled load is dropped: a centered retry glyph on the
+  // placeholder gray.
+  retryTile: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // Corner retry over a still-showing blurred preview (bottom-right; the video
+  // badge owns bottom-left). Dark scrim circle so the glyph reads on any photo.
+  retryBadge: {
+    position: 'absolute',
+    right: 6,
+    bottom: 6,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(0,0,0,0.45)',
     alignItems: 'center',
     justifyContent: 'center',
   },
