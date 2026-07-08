@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 
 import { CooldownPicker } from '@/components/notifications/cooldown-picker';
+import { PermissionsPanel } from '@/components/notifications/permissions-sheet';
 import { DisplayFont, Ink, Paper } from '@/constants/theme';
 import { diagnoseAndroidMetadata } from '@/lib/android-metadata-diagnostic';
 import {
@@ -26,13 +27,14 @@ import {
   setPlaceCooldownMs,
   useNotificationSettings,
 } from '@/hooks/use-notification-settings';
-import { restartOnboarding } from '@/hooks/use-onboarding';
 import { requestRecreationsGallery } from '@/lib/gallery-request';
 import {
   getPermissionState,
   requestAllPermissions,
   type PermissionState,
 } from '@/hooks/use-permission-flow';
+
+type View_ = 'main' | 'permissions';
 
 export function SettingsSheet({
   visible,
@@ -44,6 +46,18 @@ export function SettingsSheet({
   const settings = useNotificationSettings();
   const [requesting, setRequesting] = useState(false);
   const [perm, setPerm] = useState<PermissionState | null>(null);
+  // The sheet is a single modal that swaps between the main list and an in-place
+  // Permissions sub-view (a Modal-over-Modal doesn't reliably present on iOS).
+  const [view, setView] = useState<View_>('main');
+
+  // Reset to the main view every time the sheet (re)opens. set-state-during-
+  // render on a prop change is React's supported "reset on change" pattern —
+  // not a setState-in-effect (which react-hooks/set-state-in-effect forbids).
+  const [prevVisible, setPrevVisible] = useState(visible);
+  if (visible !== prevVisible) {
+    setPrevVisible(visible);
+    if (visible && view !== 'main') setView('main');
+  }
 
   // Re-read the live permission state whenever the sheet opens or the toggle
   // flips, so we can warn when the feature is on but can't actually deliver
@@ -116,146 +130,162 @@ export function SettingsSheet({
       <Pressable style={styles.backdrop} onPress={onClose}>
         {/* stopPropagation: tapping inside the sheet should not dismiss it */}
         <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
-          <Text style={styles.title}>Settings</Text>
+          {view === 'permissions' ? (
+            <PermissionsPanel onBack={() => setView('main')} />
+          ) : (
+            <>
+              <Text style={styles.title}>Settings</Text>
 
-          <View style={styles.notifBlock}>
-            <View style={styles.row}>
-              <View style={styles.rowText}>
-                <Text style={styles.rowLabel}>Memory notifications</Text>
-              </View>
-              {/* Fixed-size slot so swapping the Switch for the spinner doesn't
-                  change the label column's width (which would reflow "MEMORY
-                  NOTIFICATIONS" between one and two lines, flashing mid-toggle). */}
-              <View style={styles.control}>
-                {requesting ? (
-                  <ActivityIndicator color={Ink} />
-                ) : (
-                  <Switch
-                    value={settings.enabled}
-                    onValueChange={handleToggle}
-                    trackColor={{ true: Ink, false: '#D1D1D6' }}
-                    thumbColor={Paper}
-                    ios_backgroundColor="#D1D1D6"
-                  />
-                )}
-              </View>
-            </View>
-            {/* Full-width below the toggle row, not boxed into the left column. */}
-            <Text style={styles.rowSub}>
-              Get notified when you&apos;re near a place where you took photos in the past. (Needs
-              location and notification permissions)
-            </Text>
-          </View>
-
-          {/* Only relevant once notifications are on. */}
-          {settings.enabled ? (
-            <View style={styles.notifBlock}>
-              <View style={styles.row}>
-                <View style={styles.rowText}>
-                  <Text style={styles.rowLabel}>Remind me again</Text>
+              <View style={styles.block}>
+                <View style={styles.row}>
+                  <View style={styles.rowText}>
+                    <Text style={styles.rowLabel}>Memory notifications</Text>
+                  </View>
+                  {/* Fixed-size slot so swapping the Switch for the spinner
+                      doesn't reflow the label between one and two lines. */}
+                  <View style={styles.control}>
+                    {requesting ? (
+                      <ActivityIndicator color={Ink} />
+                    ) : (
+                      <Switch
+                        value={settings.enabled}
+                        onValueChange={handleToggle}
+                        trackColor={{ true: Ink, false: '#D1D1D6' }}
+                        thumbColor={Paper}
+                        ios_backgroundColor="#D1D1D6"
+                      />
+                    )}
+                  </View>
                 </View>
-                <CooldownPicker
-                  value={settings.placeCooldownMs}
-                  onChange={setPlaceCooldownMs}
-                />
+                <Text style={styles.rowSub}>
+                  Get notified when you&apos;re near a place where you took photos in the past.
+                  (Needs location and notification permissions)
+                </Text>
               </View>
-              <Text style={styles.rowSub}>
-                After a place reminds you, how long before it can notify you there again.
-              </Text>
-            </View>
-          ) : null}
 
-          {degraded ? (
-            <Pressable style={styles.warning} onPress={() => Linking.openSettings()}>
-              <Text style={styles.warningText}>{degradedReason}</Text>
-              <Text style={styles.warningAction}>Open Settings</Text>
-            </Pressable>
-          ) : null}
+              {/* Only relevant once notifications are on. */}
+              {settings.enabled ? (
+                <View style={styles.block}>
+                  <View style={styles.row}>
+                    <View style={styles.rowText}>
+                      <Text style={styles.rowLabel}>Remind me again</Text>
+                    </View>
+                    <CooldownPicker
+                      value={settings.placeCooldownMs}
+                      onChange={setPlaceCooldownMs}
+                    />
+                  </View>
+                  <Text style={styles.rowSub}>
+                    After a place reminds you, how long before it can notify you there again.
+                  </Text>
+                </View>
+              ) : null}
 
-          <View style={styles.aboutBlock}>
-            <Pressable
-              style={styles.replayRow}
-              onPress={() => {
-                // The gallery overlay is owned by TopTabs; close the sheet so
-                // it isn't stacked under this modal.
-                onClose();
-                requestRecreationsGallery();
-              }}>
-              <Text style={styles.replayLabel}>Your recreations</Text>
-            </Pressable>
-            <Pressable
-              style={styles.replayRow}
-              onPress={() => {
-                // Re-show the first-run tour from the top. The gate is reactive,
-                // so the overlay reappears once the sheet closes.
-                restartOnboarding();
-                onClose();
-              }}>
-              <Text style={styles.replayLabel}>How PastPic works</Text>
-            </Pressable>
-            <Text style={styles.privacyNote}>
-              Everything stays on your phone. Your photos and location never leave your device.
-            </Text>
-          </View>
-
-          {__DEV__ ? (
-            <View style={styles.devRow}>
-              <Pressable
-                style={styles.devButton}
-                onPress={async () => {
-                  // Close first so the root-level banner isn't hidden behind this
-                  // modal; the async location read gives the modal time to dismiss
-                  // before the banner animates in.
-                  onClose();
-                  const res = await previewForegroundBanner();
-                  if (!res.ok) Alert.alert('Could not preview', res.message);
-                }}>
-                <Text style={styles.devButtonLabel}>Preview memory banner (foreground)</Text>
-              </Pressable>
-              <Pressable
-                style={styles.devButton}
-                onPress={async () => {
-                  const res = await triggerNearestMemoryHere();
-                  Alert.alert(res.ok ? 'Memory scheduled' : 'Could not trigger', res.message);
-                }}>
-                <Text style={styles.devButtonLabel}>Trigger a memory here</Text>
-              </Pressable>
-              <Pressable
-                style={styles.devButton}
-                onPress={async () => {
-                  const ok = await fireTestNotification();
-                  Alert.alert(
-                    ok ? 'Test scheduled' : 'Notifications off',
-                    ok
-                      ? 'Background the app now. A test notification will appear in ~8 seconds.'
-                      : 'Turn on "Memory notifications" (or allow them in system Settings) first.'
-                  );
-                }}>
-                <Text style={styles.devButtonLabel}>Send test notification</Text>
-              </Pressable>
-              <Pressable
-                style={styles.devButton}
-                onPress={async () => {
-                  const res = await inspectRadiiHere();
-                  Alert.alert(res.ok ? 'Radii here' : 'Could not read radii', res.message);
-                }}>
-                <Text style={styles.devButtonLabel}>Show radii here</Text>
-              </Pressable>
-              {Platform.OS === 'android' ? (
-                <Pressable
-                  style={styles.devButton}
-                  onPress={async () => {
-                    const report = await diagnoseAndroidMetadata();
-                    Alert.alert('Android metadata', report);
-                  }}>
-                  <Text style={styles.devButtonLabel}>Diagnose photo metadata</Text>
+              {degraded ? (
+                <Pressable style={styles.warning} onPress={() => Linking.openSettings()}>
+                  <Text style={styles.warningText}>{degradedReason}</Text>
+                  <Text style={styles.warningAction}>Open Settings</Text>
                 </Pressable>
               ) : null}
-            </View>
-          ) : null}
+
+              {/* Grouped nav rows: a cohesive settings list, not scattered pills. */}
+              <View style={styles.navGroup}>
+                <NavRow label="Permissions" first onPress={() => setView('permissions')} />
+                <NavRow
+                  label="Your recreations"
+                  onPress={() => {
+                    // The gallery overlay is owned by TopTabs; close the sheet
+                    // so it isn't stacked under this modal.
+                    onClose();
+                    requestRecreationsGallery();
+                  }}
+                />
+              </View>
+
+              <Text style={styles.privacyNote}>
+                Everything stays on your phone. Your photos and location never leave your device.
+              </Text>
+
+              {__DEV__ ? (
+                <View style={styles.devRow}>
+                  <Pressable
+                    style={styles.devButton}
+                    onPress={async () => {
+                      onClose();
+                      const res = await previewForegroundBanner();
+                      if (!res.ok) Alert.alert('Could not preview', res.message);
+                    }}>
+                    <Text style={styles.devButtonLabel}>Preview memory banner (foreground)</Text>
+                  </Pressable>
+                  <Pressable
+                    style={styles.devButton}
+                    onPress={async () => {
+                      const res = await triggerNearestMemoryHere();
+                      Alert.alert(res.ok ? 'Memory scheduled' : 'Could not trigger', res.message);
+                    }}>
+                    <Text style={styles.devButtonLabel}>Trigger a memory here</Text>
+                  </Pressable>
+                  <Pressable
+                    style={styles.devButton}
+                    onPress={async () => {
+                      const ok = await fireTestNotification();
+                      Alert.alert(
+                        ok ? 'Test scheduled' : 'Notifications off',
+                        ok
+                          ? 'Background the app now. A test notification will appear in ~8 seconds.'
+                          : 'Turn on "Memory notifications" (or allow them in system Settings) first.'
+                      );
+                    }}>
+                    <Text style={styles.devButtonLabel}>Send test notification</Text>
+                  </Pressable>
+                  <Pressable
+                    style={styles.devButton}
+                    onPress={async () => {
+                      const res = await inspectRadiiHere();
+                      Alert.alert(res.ok ? 'Radii here' : 'Could not read radii', res.message);
+                    }}>
+                    <Text style={styles.devButtonLabel}>Show radii here</Text>
+                  </Pressable>
+                  {Platform.OS === 'android' ? (
+                    <Pressable
+                      style={styles.devButton}
+                      onPress={async () => {
+                        const report = await diagnoseAndroidMetadata();
+                        Alert.alert('Android metadata', report);
+                      }}>
+                      <Text style={styles.devButtonLabel}>Diagnose photo metadata</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+              ) : null}
+            </>
+          )}
         </Pressable>
       </Pressable>
     </Modal>
+  );
+}
+
+function NavRow({
+  label,
+  first,
+  onPress,
+}: {
+  label: string;
+  first?: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      style={({ pressed }) => [
+        styles.navRow,
+        !first && styles.navDivider,
+        pressed && styles.navRowPressed,
+      ]}
+      onPress={onPress}>
+      <Text style={styles.navLabel}>{label}</Text>
+      <Text style={styles.chevron}>›</Text>
+    </Pressable>
   );
 }
 
@@ -278,7 +308,7 @@ const styles = StyleSheet.create({
     fontSize: 22,
     textTransform: 'uppercase',
   },
-  notifBlock: {
+  block: {
     gap: 4,
   },
   row: {
@@ -326,22 +356,37 @@ const styles = StyleSheet.create({
     fontSize: 12,
     textTransform: 'uppercase',
   },
-  aboutBlock: {
-    gap: 10,
-  },
-  replayRow: {
-    alignSelf: 'flex-start',
-    paddingVertical: 10,
-    paddingHorizontal: 18,
-    borderRadius: 32,
+  // Outlined card grouping the settings-list nav rows.
+  navGroup: {
     borderWidth: 1,
     borderColor: Ink,
+    borderRadius: 12,
+    overflow: 'hidden',
   },
-  replayLabel: {
+  navRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+  },
+  navRowPressed: {
+    backgroundColor: '#F2F2F2',
+  },
+  navDivider: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#E3E3E3',
+  },
+  navLabel: {
     fontFamily: DisplayFont,
     color: Ink,
-    fontSize: 13,
+    fontSize: 14,
     textTransform: 'uppercase',
+  },
+  chevron: {
+    color: '#BBB',
+    fontSize: 24,
+    lineHeight: 24,
   },
   privacyNote: {
     color: '#777',
