@@ -22,6 +22,7 @@ import { scheduleOnRN } from 'react-native-worklets';
 import { Image } from 'expo-image';
 import { Asset, MediaType } from 'expo-media-library';
 
+import CameraIcon from '@/assets/icons/camera.svg';
 import ShareIcon from '@/assets/icons/share.svg';
 import ShuffleIcon from '@/assets/icons/shuffle.svg';
 import { LoadingPolaroid } from '@/components/brand/loading-polaroid';
@@ -41,16 +42,28 @@ import {
   getCachedMetadata,
   hydrateAsset,
   loadAssetIsInCloud,
+  loadAssetMediaType,
+  useAssetMetadata,
 } from '@/hooks/use-asset-metadata';
 import { useMediaPermission } from '@/hooks/use-media-permission';
 import { prefetchReverseGeocode } from '@/hooks/use-reverse-geocode';
 import { getAssetRatio, setAssetRatio } from '@/lib/asset-ratio-cache';
 import { nextOnDeviceIndex } from '@/lib/feed-on-device';
 import { entryCandidateOrder } from '@/lib/feed-entry';
-import { ENTRY_SELECT_DEADLINE_MS } from '@/lib/loading-timeouts';
+import { pendingWarmDownload, planWarmMounts, type WarmEntry } from '@/lib/feed-warm-plan';
+import { isPlaceholderLoad } from '@/lib/image-load-event';
+import { withTimeoutDefault } from '@/lib/async-safety';
+import {
+  ENTRY_SELECT_DEADLINE_MS,
+  FIND_ON_DEVICE_SCAN_MS,
+  OLD_MEMORY_DOWNLOAD_CAP_MS,
+  WARM_FAILURE_PAUSE_MS,
+  WARM_PENDING_DOWNLOAD_MS,
+} from '@/lib/loading-timeouts';
 import { getWarmedEntryId } from '@/lib/feed-entry-warm';
 import { cardLoadPriority } from '@/lib/feed-priority';
 import { markFirstPaint } from '@/lib/first-paint';
+import { requestRecreation } from '@/lib/recreation-request';
 import { requestShare } from '@/lib/share-memory';
 
 let rememberedAssetId: string | null = null;
@@ -112,10 +125,14 @@ function OverlayFramedPhoto({
 }: {
   uri: string;
   frame: FrameLayout;
-  // `ok` distinguishes a real paint from a load failure — overlay callers
-  // proceed either way, but warm/download callers must not treat a failed
-  // photo as cached.
-  onReady?: (ok: boolean) => void;
+  // `ok` distinguishes a real paint from a load failure; `final` distinguishes
+  // the full image from the degraded blurred placeholder the patched
+  // opportunistic delivery paints first. Overlay callers proceed on any paint,
+  // but warm/download callers must only count `ok && final` — the blur means
+  // the bytes are NOT here yet (and it's never cached by SDWebImage), so
+  // treating it as warm would put un-downloaded iCloud photos in the shuffle
+  // rotation and un-serialize the background downloads.
+  onReady?: (ok: boolean, final: boolean) => void;
   // Visible overlays (splash, crossfade) load at high priority; the hidden
   // warm-layer / old-memory decodes run at 'low' so they never outrank the
   // photo the user is actually looking at.
@@ -149,9 +166,9 @@ function OverlayFramedPhoto({
             setAssetRatio(uri, w / h);
             if (w > h) setLoadedLandscapeUri(uri);
           }
-          onReady?.(true);
+          onReady?.(true, !isPlaceholderLoad(e));
         }}
-        onError={() => onReady?.(false)}
+        onError={() => onReady?.(false, true)}
       />
     </PhotoFrame>
   );
@@ -206,16 +223,24 @@ export function Feed({
     null
   );
   // Pre-picked shuffle destinations. The ref is the source of truth for picks;
-  // warmIds mirrors it into the hidden warm layer, which decodes each queued
-  // photo at the card's exact frame size so a shuffle lands on a cache hit.
+  // warmEntries mirrors it (with iCloud residency captured at admission time from
+  // the refill probe — never read from module caches in render) into the hidden
+  // warm layer, which decodes each queued photo at the card's exact frame size so
+  // a shuffle lands on a cache hit.
   const shuffleQueueRef = useRef<string[]>([]);
-  const [warmIds, setWarmIds] = useState<string[]>([]);
+  const [warmEntries, setWarmEntries] = useState<WarmEntry[]>([]);
+  // Residency by queued id, written when the refill loop admits an entry (it has
+  // the probe result in hand) and read only inside refill to build warmEntries.
+  const queueCloudRef = useRef<Map<string, boolean>>(new Map());
   // The old memory currently downloading via a hidden frame-sized render
   // (null = none). State so the warm layer mounts/unmounts the view.
   const [downloadingOldId, setDownloadingOldId] = useState<string | null>(null);
-  // Queue entries whose hidden warm render has finished decoding — shuffle
-  // prefers these so rapid presses land on cache hits, not in-flight loads.
-  const warmLoadedRef = useRef<Set<string>>(new Set());
+  // Queue entries whose hidden warm render finished decoding the FINAL image
+  // (bytes in the cache — a blurred preview doesn't count) — shuffle prefers
+  // these so rapid presses land on cache hits, not in-flight downloads. State,
+  // not a ref: planWarmMounts below must recompute (and mount the next pending
+  // cloud download) when an entry completes.
+  const [warmLoaded, setWarmLoaded] = useState<ReadonlySet<string>>(() => new Set());
   // One transition at a time: busy from staging a crossfade until BOTH the
   // fade finished and the destination card reported rendered — fade-end alone
   // isn't enough, since the 1500ms timeout forces the fade even when the
@@ -252,7 +277,9 @@ export function Feed({
   // "Find one on device" is invoked from a card (which can't reference
   // assets/listRef, defined below); route through a ref kept current by the
   // effect below, so cardEvents stays a stable memo.
-  const findOnDeviceHandlerRef = useRef<(assetId: string) => void>(() => {});
+  const findOnDeviceHandlerRef = useRef<(assetId: string) => Promise<boolean>>(
+    async () => false
+  );
 
   const cardEvents = useMemo<FeedCardEvents>(
     () => ({
@@ -307,13 +334,14 @@ export function Feed({
     [assets, currentId]
   );
 
-  // Async (one in flight at a time): each candidate is checked against
-  // iCloud before admission. On-device photos enter freely; at most ONE
-  // not-yet-downloaded iCloud photo may occupy the queue at a time — its warm
-  // render downloads it in the background, and the pick preference below
-  // won't land on it until that finishes. This is what keeps a burst of
-  // shuffles from ever waiting on the network: cloud photos rotate in only
-  // once their bytes are here.
+  // Async (one in flight at a time): each candidate's iCloud residency is
+  // probed before admission and captured on the entry. Cloud photos are
+  // admitted freely (on a heavily offloaded library the old one-pending-cloud
+  // admission gate starved the queue, pushing shuffles onto the cold path);
+  // their DOWNLOADS are serialized instead by planWarmMounts, which mounts only
+  // one not-yet-downloaded cloud entry at a time. The pick preference below
+  // still never lands on an un-downloaded cloud photo while something
+  // renderable is available.
   const refillShuffleQueue = useCallback(
     async (alsoExclude?: string | null) => {
       if (!isActive || assets.length === 0) return;
@@ -324,20 +352,20 @@ export function Feed({
         const exclude = new Set<string>(shuffleQueueRef.current);
         if (currentId) exclude.add(currentId);
         if (alsoExclude) exclude.add(alsoExclude);
-        // Pending (un-downloaded) cloud entries already queued count against
-        // the cap, so stuck downloads can't accumulate across refills.
-        let pendingCloud = shuffleQueueRef.current.filter(
-          (id) => getCachedIsInCloud(id) === true && !warmLoadedRef.current.has(id)
-        ).length;
         let added = false;
         // Inject ONE pre-fetched old memory per refill, ahead of the random
-        // sampling, so the rotation keeps mixing in older photos.
+        // sampling, so the rotation keeps mixing in older photos. Pool ids were
+        // all genuinely probed (that's how they entered the pool), so the
+        // residency cache hits; a downloaded old memory still reads as in-cloud
+        // there, which just routes it through the (instantly satisfied, the
+        // bytes are cached) download slot.
         while (oldMemoryPool.length > 0) {
           const id = oldMemoryPool.shift()!;
           if (exclude.has(id) || !assets.some((a) => a.id === id)) continue;
           exclude.add(id);
           const asset = assets.find((a) => a.id === id)!;
           warmAssetMetadata(asset);
+          queueCloudRef.current.set(id, getCachedIsInCloud(id) ?? false);
           shuffleQueueRef.current.push(id);
           added = true;
           break;
@@ -348,29 +376,83 @@ export function Feed({
           const candidate = assets[Math.floor(Math.random() * assets.length)];
           if (exclude.has(candidate.id)) continue;
           exclude.add(candidate.id);
+          // A timed-out probe answers `true` (pessimistic, uncached) — recorded
+          // as-is so the entry waits its turn in the download slot.
           const inCloud = await loadAssetIsInCloud(candidate);
-          if (inCloud) {
-            if (pendingCloud >= 1) continue;
-            pendingCloud += 1;
-          }
           warmAssetMetadata(candidate);
+          queueCloudRef.current.set(candidate.id, inCloud);
           shuffleQueueRef.current.push(candidate.id);
           added = true;
         }
         if (!added) return;
         const queue = shuffleQueueRef.current;
-        // Drop loaded-marks for ids no longer queued so the set tracks only
-        // the mounted warm layer.
-        for (const id of warmLoadedRef.current) {
-          if (!queue.includes(id)) warmLoadedRef.current.delete(id);
+        const queued = new Set(queue);
+        // Drop residency records and loaded-marks for ids no longer queued so
+        // both track only the live queue.
+        for (const id of queueCloudRef.current.keys()) {
+          if (!queued.has(id)) queueCloudRef.current.delete(id);
         }
-        setWarmIds([...queue]);
+        setWarmLoaded((prev) => {
+          const kept = [...prev].filter((id) => queued.has(id));
+          return kept.length === prev.size ? prev : new Set(kept);
+        });
+        setWarmEntries(
+          queue.map((id) => ({ id, inCloud: queueCloudRef.current.get(id) ?? false }))
+        );
       } finally {
         refillInFlightRef.current = false;
       }
     },
     [assets, currentId, isActive]
   );
+
+  // A failed (or stalled, via the watchdog below) warm render is dropped from
+  // the queue entirely so it can't hold the download slot or get picked as the
+  // queue[0] last resort; the refill effect tops the queue back up.
+  const dropWarmEntry = useCallback((id: string) => {
+    shuffleQueueRef.current = shuffleQueueRef.current.filter((q) => q !== id);
+    queueCloudRef.current.delete(id);
+    setWarmEntries((prev) =>
+      prev.some((e) => e.id === id) ? prev.filter((e) => e.id !== id) : prev
+    );
+  }, []);
+
+  const markWarmLoaded = useCallback((id: string) => {
+    setWarmLoaded((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+  }, []);
+
+  // A FAILED warm download pauses the download slot: dropping the failed entry
+  // triggers an immediate refill, so fast failures (offline, storage-full)
+  // would otherwise loop mount→error→drop→refill against the Photos framework
+  // all session. Renderable entries keep mounting; only the pending-download
+  // slot waits out the pause.
+  const [warmPausedUntil, setWarmPausedUntil] = useState(0);
+  useEffect(() => {
+    if (!warmPausedUntil) return;
+    const t = setTimeout(
+      () => setWarmPausedUntil(0),
+      Math.max(0, warmPausedUntil - Date.now())
+    );
+    return () => clearTimeout(t);
+  }, [warmPausedUntil]);
+  const warmDownloadsPaused = warmPausedUntil !== 0;
+
+  // What the hidden warm layer mounts right now — every renderable entry plus
+  // at most ONE not-yet-downloaded cloud entry (download serialization lives
+  // here, not at queue admission). Pure functions of state, so the plan
+  // recomputes exactly when an entry completes or drops.
+  const mountedWarmIds = planWarmMounts(warmEntries, warmLoaded, !warmDownloadsPaused);
+  const pendingWarmId = warmDownloadsPaused
+    ? null
+    : pendingWarmDownload(warmEntries, warmLoaded);
+
+  // Watchdog: a warm download that never completes (no load, no error) is
+  // dropped so it can't pin the single download slot for the whole session.
+  useEffect(() => {
+    if (!pendingWarmId) return;
+    const t = setTimeout(() => dropWarmEntry(pendingWarmId), WARM_PENDING_DOWNLOAD_MS);
+    return () => clearTimeout(t);
+  }, [pendingWarmId, dropWarmEntry]);
 
   // Sample the older two-thirds of the (newest-first) library for the next
   // old memory to fetch. Already-local old photos join the pool immediately —
@@ -420,6 +502,16 @@ export function Feed({
     hasPaintedFirst,
     pickOldCloudCandidate,
   ]);
+
+  // Watchdog for the old-memory slot: a hidden download that never reports
+  // (stalled fetch) is cleared uncounted so the trickle isn't dead for the
+  // session (oldMemoryTries was already incremented at pick time, so the
+  // session caps still converge).
+  useEffect(() => {
+    if (!downloadingOldId) return;
+    const t = setTimeout(() => setDownloadingOldId(null), OLD_MEMORY_DOWNLOAD_CAP_MS);
+    return () => clearTimeout(t);
+  }, [downloadingOldId]);
 
   const prefetchAround = useCallback(
     (idx: number) => {
@@ -474,10 +566,15 @@ export function Feed({
           }
         }
       }
-      // Random entry: probe candidates for one that's on device, so a fresh
-      // launch doesn't open on an iCloud download spinner. entryCandidateOrder
-      // tries a random sample first (keeps the "random memory" feel) then the
-      // newest photos (most likely kept on-device under Optimize Storage).
+      // Random entry: probe a purely random sample for a candidate that's on
+      // device (instant sharp paint) and commit the first hit. Deliberately NO
+      // newest-photos block here (recentN = 0): under Optimize iPhone Storage
+      // only recent photos stay local, so the old newest-block fallback pinned
+      // every cold launch to the most recent photo. When the whole sample is
+      // iCloud-resident we open a random cloud photo instead and let the
+      // blur→sharp opportunistic delivery cover the download. (The onboarding
+      // prewarm keeps the newest block — it must find SOME on-device photo to
+      // pre-decode, and the feed adopts its pick via getWarmedEntryId above.)
       let cancelled = false;
       let committed = false;
       const commitOnce = (idx: number) => {
@@ -485,25 +582,73 @@ export function Feed({
         committed = true;
         commit(idx);
       };
+      const order = entryCandidateOrder(assets.length, Math.random, 30, 0);
+      // The DEADLINE fallback target: a RANDOM asset known to be a photo.
+      // Blindly committing index 0 pinned every fallback launch to the SAME
+      // newest asset (first the just-recorded video — the one entry the probe
+      // itself can never pick, since videos read as in-cloud — and, made
+      // deterministic-photo, still "the app always opens on this one"). A cheap
+      // parallel media-type scan over the first few candidates of the already-
+      // random order resolves while the residency probe below runs; the
+      // earliest scanned photo wins, so the fallback inherits the order's
+      // randomness. The residency probe dedupes these reads, so the scan is
+      // effectively free. Newest asset remains the absolute last resort when
+      // nothing resolved at all (an extremely cold Photos framework). The
+      // exhausted-sample path below does its own full-order walk instead.
+      let fallbackPos: number | null = null;
+      (async () => {
+        const scan = order.slice(0, Math.min(order.length, 10));
+        await Promise.all(
+          scan.map(async (idx, pos) => {
+            const type = await loadAssetMediaType(assets[idx]);
+            if (cancelled || type !== MediaType.IMAGE) return;
+            if (fallbackPos == null || pos < fallbackPos) fallbackPos = pos;
+          })
+        );
+      })();
+      const fallback = () =>
+        commitOnce(fallbackPos != null ? order[fallbackPos] : 0);
       // Hard deadline: entry selection must ALWAYS resolve, so a slow probe pass
       // can never leave the feed pinned on the loading Polaroid (Image #2).
-      // After this, open the newest photo and let its in-card load state cover
-      // the wait. (Per-probe is already bounded in loadAssetIsInCloud.)
-      const deadline = setTimeout(() => commitOnce(0), ENTRY_SELECT_DEADLINE_MS);
+      // After this, open the fallback photo and let its in-card load state
+      // (blur-first delivery, "Accessing from iCloud…") cover any wait.
+      // (Per-probe is already bounded in loadAssetIsInCloud.)
+      const deadline = setTimeout(fallback, ENTRY_SELECT_DEADLINE_MS);
       (async () => {
-        const order = entryCandidateOrder(assets.length);
-        for (const idx of order) {
-          const inCloud = await loadAssetIsInCloud(assets[idx]);
+        // Probe in small parallel batches (earliest candidate still wins within
+        // a batch): sequential probing against a cold Photos framework burned
+        // the whole deadline on one or two slow candidates, sending most cold
+        // launches to the fallback instead of a random on-device memory.
+        const BATCH = 4;
+        for (let i = 0; i < order.length; i += BATCH) {
+          const results = await Promise.all(
+            order.slice(i, i + BATCH).map(async (idx) => ({
+              idx,
+              inCloud: await loadAssetIsInCloud(assets[idx]),
+            }))
+          );
           if (cancelled || committed) return;
-          if (!inCloud) {
+          const hit = results.find((r) => !r.inCloud);
+          if (hit) {
+            commitOnce(hit.idx);
+            return;
+          }
+        }
+        // Whole sample was iCloud-resident (heavily offloaded library): commit
+        // the earliest candidate confirmed to be a PHOTO — a random cloud
+        // photo, painted blur-first while the in-card "Accessing from iCloud"
+        // state covers the download. The probe loop above already resolved
+        // every candidate's media type, so these reads are cache hits; an
+        // UNKNOWN re-read that stalls is covered by the deadline.
+        for (const idx of order) {
+          const type = await loadAssetMediaType(assets[idx]);
+          if (cancelled || committed) return;
+          if (type === MediaType.IMAGE) {
             commitOnce(idx);
             return;
           }
         }
-        // Whole sample was iCloud-resident (heavily offloaded library): open on
-        // the newest photo and let the in-card "Accessing from iCloud" state
-        // explain the wait while it downloads.
-        commitOnce(0);
+        fallback();
       })();
       return () => {
         cancelled = true;
@@ -538,14 +683,22 @@ export function Feed({
   }, [state.status, entryIndex]);
 
   // Top the queue back up whenever the feed becomes active, the library
-  // changes, or a shuffle lands (currentId change recreates the callback) —
-  // but never while a crossfade is in flight, so the warm layer's decodes
-  // can't compete with the destination photo's own load.
+  // changes, a shuffle lands (currentId change recreates the callback), or an
+  // entry is dropped (warmEntries shrinks) — but never while a crossfade is in
+  // flight, so the warm layer's decodes can't compete with the destination
+  // photo's own load. Converges via the queue-full early return in the refill.
   useEffect(() => {
     if (isActive && hasPaintedFirst && !outgoingAssetId && !transitionActive) {
       refillShuffleQueue();
     }
-  }, [isActive, hasPaintedFirst, outgoingAssetId, transitionActive, refillShuffleQueue]);
+  }, [
+    isActive,
+    hasPaintedFirst,
+    outgoingAssetId,
+    transitionActive,
+    warmEntries,
+    refillShuffleQueue,
+  ]);
 
   const shuffle = useCallback(() => {
     if (assets.length === 0) return;
@@ -555,10 +708,10 @@ export function Feed({
     // stacked enough photo loads to starve the visible one for many seconds.
     if (shuffleBusyRef.current) return;
 
-    // Prefer a destination whose hidden warm render has finished decoding,
-    // then any confirmed on-device entry — never an un-downloaded iCloud
-    // photo while something renderable is available.
-    const loaded = warmLoadedRef.current;
+    // Prefer a destination whose hidden warm render has finished decoding the
+    // FINAL image, then any confirmed on-device entry — never an un-downloaded
+    // iCloud photo while something renderable is available.
+    const loaded = warmLoaded;
     const queue = shuffleQueueRef.current.filter(
       (id) => id !== currentId && assets.some((a) => a.id === id)
     );
@@ -613,7 +766,7 @@ export function Feed({
     setCurrentId(pickedId);
     if (rememberLastPosition) rememberedAssetId = pickedId;
     listRef.current?.scrollToIndex({ index: newIdx, animated: false });
-  }, [assets, currentId, fadeOpacity, rememberLastPosition]);
+  }, [assets, currentId, fadeOpacity, rememberLastPosition, warmLoaded]);
 
   // Open the share chooser for the photo on screen. The mediaType is read from
   // the warmed metadata cache (the visible card has already loaded its caption,
@@ -626,21 +779,85 @@ export function Feed({
     requestShare(asset, cached?.mediaType === MediaType.VIDEO);
   }, [assets, currentId]);
 
+  // The current card's settled metadata, via the reactive hook rather than a
+  // bare cache read in render (which the React Compiler would memoize stale —
+  // see CLAUDE.md). Gates the Recreate button to confirmed photos; the visible
+  // card hydrates the same asset, so this adds no native reads.
+  const currentAsset = useMemo(
+    () => (currentId ? (assets.find((a) => a.id === currentId) ?? null) : null),
+    [assets, currentId]
+  );
+  const currentMeta = useAssetMetadata(currentAsset);
+  const currentIsPhoto = currentMeta?.mediaType === MediaType.IMAGE;
+
+  // Soft-dim the create ring on videos rather than unmounting it, so the
+  // action triad's composition never jumps while swiping.
+  const recreateFade = useAnimatedStyle(() => ({
+    opacity: withTiming(currentIsPhoto ? 1 : 0.25, { duration: 180 }),
+  }));
+
+  // Open the recreation camera for the photo on screen, seeding it with the
+  // metadata the card has already loaded (missing fields backfill lazily).
+  const handleRecreate = useCallback(() => {
+    if (!currentId) return;
+    const asset = assets.find((a) => a.id === currentId);
+    if (!asset) return;
+    const cached = getCachedMetadata(currentId);
+    if (cached?.mediaType === MediaType.VIDEO) return;
+    requestRecreation({
+      asset,
+      creationTime: cached?.creationTime ?? null,
+      location: cached?.location ?? null,
+    });
+  }, [assets, currentId]);
+
   // User tapped "Find one on device" on a card whose photo couldn't load: jump
   // to the nearest on-device memory (instant cut — no crossfade, since fading
-  // from a black error frame is meaningless). No-op if none is known on-device.
-  // Never automatic; only this explicit tap moves the user.
+  // from a black error frame is meaningless). Resolves whether it found one so
+  // the card can show "None on device" instead of a silent no-op. Never
+  // automatic; only this explicit tap moves the user.
   useEffect(() => {
-    findOnDeviceHandlerRef.current = (assetId: string) => {
-      if (assetId !== currentId) return;
+    findOnDeviceHandlerRef.current = async (assetId: string) => {
+      if (assetId !== currentId) return false;
       const idx = assets.findIndex((a) => a.id === currentId);
-      if (idx < 0) return;
+      if (idx < 0) return false;
+      const jumpTo = (i: number) => {
+        setCurrentId(assets[i].id);
+        if (rememberLastPosition) rememberedAssetId = assets[i].id;
+        listRef.current?.scrollToIndex({ index: i, animated: false });
+      };
+      // Instant path: something already KNOWN local from earlier probes.
       const candidates = assets.map((a) => ({ inCloud: getCachedIsInCloud(a.id) }));
-      const next = nextOnDeviceIndex(candidates, idx);
-      if (next == null) return;
-      setCurrentId(assets[next].id);
-      if (rememberLastPosition) rememberedAssetId = assets[next].id;
-      listRef.current?.scrollToIndex({ index: next, animated: false });
+      const cached = nextOnDeviceIndex(candidates, idx);
+      if (cached != null) {
+        jumpTo(cached);
+        return true;
+      }
+      // Nothing known yet (cold caches, or a genuinely offloaded library): probe
+      // forward from here in small batches for the first confirmed-local asset.
+      // Bounded twice — a candidate cap and a hard time budget, since the user
+      // is staring at the button — and videos auto-skip (they read as in-cloud).
+      const SCAN_LIMIT = 40;
+      const BATCH = 4;
+      const scan = async (): Promise<number | null> => {
+        const steps = Math.min(SCAN_LIMIT, assets.length - 1);
+        for (let s = 1; s <= steps; s += BATCH) {
+          const batch = Array.from(
+            { length: Math.min(BATCH, steps - s + 1) },
+            (_, k) => (idx + s + k) % assets.length
+          );
+          const results = await Promise.all(
+            batch.map(async (i) => ({ i, inCloud: await loadAssetIsInCloud(assets[i]) }))
+          );
+          const hit = results.find((r) => !r.inCloud);
+          if (hit) return hit.i;
+        }
+        return null;
+      };
+      const found = await withTimeoutDefault(scan(), FIND_ON_DEVICE_SCAN_MS, null);
+      if (found == null) return false;
+      jumpTo(found);
+      return true;
     };
   }, [assets, currentId, rememberLastPosition]);
 
@@ -887,17 +1104,30 @@ export function Feed({
       {/* Hidden warm layer: decodes queued shuffle destinations at the card's
           exact frame size, so their cache entries are the ones the destination
           card reads (the cache key includes the view's pixel size — a plain
-          prefetch can't populate it). Invisible and non-interactive. */}
-      {isReady && (warmIds.length > 0 || downloadingOldId) ? (
+          prefetch can't populate it). Invisible and non-interactive. Mounts
+          only what planWarmMounts admits: renderable entries plus one pending
+          cloud download at a time. */}
+      {isReady && (mountedWarmIds.length > 0 || downloadingOldId) ? (
         <View style={styles.warmLayer} pointerEvents="none">
-          {warmIds.map((id) => (
+          {mountedWarmIds.map((id) => (
             <OverlayFramedPhoto
               key={id}
               uri={id}
               frame={frame}
               priority="low"
-              onReady={(ok) => {
-                if (ok) warmLoadedRef.current.add(id);
+              onReady={(ok, final) => {
+                // Only the FINAL image counts as warm (the blur isn't cached and
+                // its bytes aren't here); a failure drops the entry entirely —
+                // and, when it was the active download, pauses the slot so a
+                // fast-failing condition can't churn retries.
+                if (ok && final) {
+                  markWarmLoaded(id);
+                } else if (!ok) {
+                  if (id === pendingWarmId) {
+                    setWarmPausedUntil(Date.now() + WARM_FAILURE_PAUSE_MS);
+                  }
+                  dropWarmEntry(id);
+                }
               }}
             />
           ))}
@@ -907,7 +1137,10 @@ export function Feed({
               uri={downloadingOldId}
               frame={frame}
               priority="low"
-              onReady={(ok) => {
+              onReady={(ok, final) => {
+                // The blur landing just means the download is underway — keep
+                // the slot until the full image (or a failure) settles it.
+                if (ok && !final) return;
                 if (ok) {
                   oldMemoryPool.push(downloadingOldId);
                   oldMemoriesDownloaded += 1;
@@ -919,32 +1152,46 @@ export function Feed({
         </View>
       ) : null}
 
+      {/* One centered action triad — share / shutter-ring / shuffle — on the
+          same vertical axis as the frame and caption (everything on this page
+          is center-composed; edge-pinned buttons were the one element off the
+          axis and made the whole page read asymmetric). Fixed-width slots keep
+          the geometry identical when a button hides (videos hide the camera,
+          the memory overlay hides shuffle). */}
       {isReady && currentId ? (
         <View
-          style={[styles.shareWrapper, { top: frame.top + frame.height + 80 }]}
+          style={[styles.actionBar, { top: frame.top + frame.height + 80 }]}
           pointerEvents="box-none">
-          <Pressable style={styles.shuffle} onPress={handleShare} hitSlop={12}>
-            <ShareIcon width={28} height={28} color={Ink} />
-          </Pressable>
-        </View>
-      ) : null}
-
-      {isReady && showShuffle ? (
-        <View
-          style={[
-            styles.shuffleWrapper,
-            // Centered in the empty band between the caption and the screen
-            // bottom (frame bottom + the ~caption block height).
-            { top: frame.top + frame.height + 80 },
-          ]}
-          pointerEvents="box-none">
-          <Pressable
-            style={[styles.shuffle, transitionActive && styles.shuffleBusy]}
-            onPress={shuffle}
-            disabled={transitionActive}
-            hitSlop={12}>
-            <ShuffleIcon width={26} height={26} color={Ink} />
-          </Pressable>
+          <View style={styles.actionSlot}>
+            <Pressable style={styles.actionBtn} onPress={handleShare} hitSlop={12}>
+              <ShareIcon width={26} height={26} color={Ink} />
+            </Pressable>
+          </View>
+          <View style={styles.actionSlot}>
+            {/* Always mounted: on videos (and while the media type is still
+                unconfirmed) it fades to a dimmed, disabled state instead of
+                popping out of the row. */}
+            <Animated.View style={recreateFade}>
+              <Pressable
+                style={styles.recreateBtn}
+                onPress={handleRecreate}
+                disabled={!currentIsPhoto}
+                hitSlop={10}>
+                <CameraIcon width={26} height={26} color={Ink} />
+              </Pressable>
+            </Animated.View>
+          </View>
+          <View style={styles.actionSlot}>
+            {showShuffle ? (
+              <Pressable
+                style={[styles.actionBtn, transitionActive && styles.shuffleBusy]}
+                onPress={shuffle}
+                disabled={transitionActive}
+                hitSlop={12}>
+                <ShuffleIcon width={26} height={26} color={Ink} />
+              </Pressable>
+            ) : null}
+          </View>
         </View>
       ) : null}
     </View>
@@ -1009,29 +1256,40 @@ const styles = StyleSheet.create({
     color: Paper,
     fontWeight: '700',
   },
-  shuffleWrapper: {
+  // The centered action triad, vertically centered in the band below the
+  // caption (top set inline).
+  actionBar: {
     position: 'absolute',
     left: 0,
     right: 0,
     bottom: 0,
-    // vertically centered in the band below the caption (top set inline),
-    // horizontally on the right where it was
-    alignItems: 'flex-end',
+    flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'center',
-    paddingRight: 24,
+    gap: 48,
   },
-  // Mirror of the shuffle wrapper on the left, vertically aligned with it.
-  shareWrapper: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    alignItems: 'flex-start',
+  // Fixed slot so a hidden button never shifts its neighbors.
+  actionSlot: {
+    width: 56,
+    height: 56,
+    alignItems: 'center',
     justifyContent: 'center',
-    paddingLeft: 24,
   },
-  shuffle: {
+  actionBtn: {
     padding: 8,
+  },
+  // Shutter-ring create button: a hairline circle in the app's line-icon
+  // weight, primary by size and center position rather than fill. No fill —
+  // a swiping photo passes behind it and the ring should read as chrome, not
+  // a solid puck sliding over the image.
+  recreateBtn: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    borderWidth: 2,
+    borderColor: Ink,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   // Disabled-while-transitioning; on warm shuffles the dim lasts ~300ms and
   // reads as press feedback rather than a state change.

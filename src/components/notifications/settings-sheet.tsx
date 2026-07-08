@@ -27,6 +27,7 @@ import {
   useNotificationSettings,
 } from '@/hooks/use-notification-settings';
 import { restartOnboarding } from '@/hooks/use-onboarding';
+import { requestRecreationsGallery } from '@/lib/gallery-request';
 import {
   getPermissionState,
   requestAllPermissions,
@@ -172,6 +173,16 @@ export function SettingsSheet({
           ) : null}
 
           <View style={styles.aboutBlock}>
+            <Pressable
+              style={styles.replayRow}
+              onPress={() => {
+                // The gallery overlay is owned by TopTabs; close the sheet so
+                // it isn't stacked under this modal.
+                onClose();
+                requestRecreationsGallery();
+              }}>
+              <Text style={styles.replayLabel}>Your recreations</Text>
+            </Pressable>
             <Pressable
               style={styles.replayRow}
               onPress={() => {

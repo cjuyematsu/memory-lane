@@ -1,9 +1,9 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   AppState,
   FlatList,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -24,6 +24,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
 
+import CameraIcon from '@/assets/icons/camera.svg';
 import FilmIcon from '@/assets/icons/film.svg';
 import ShareIcon from '@/assets/icons/share.svg';
 import XIcon from '@/assets/icons/x.svg';
@@ -32,14 +33,22 @@ import { PhotoFrame, frameTop } from '@/components/feed/photo-frame';
 import { PinchZoom } from '@/components/pinch-zoom';
 import { DisplayFont, FrameMargin, Ink, Paper, PhotoRatio } from '@/constants/theme';
 import { usePlaybackUri } from '@/hooks/use-asset-metadata';
+import { useIcloudImageLoad } from '@/hooks/use-icloud-image-load';
 import { useReverseGeocode } from '@/hooks/use-reverse-geocode';
 import type { NearbyAsset } from '@/hooks/use-nearby-assets';
 import { getAssetRatio, setAssetRatio } from '@/lib/asset-ratio-cache';
+import {
+  FILMSTRIP_PAD_H,
+  THUMB_GAP,
+  THUMB_SIZE,
+  THUMB_STRIDE,
+  filmCenterOffset,
+  filmInitialScrollIndex,
+} from '@/lib/filmstrip-layout';
+import { requestRecreation } from '@/lib/recreation-request';
 import { requestShare } from '@/lib/share-memory';
 import { formatTimeAgo } from '@/utils/time-ago';
 
-const THUMB_SIZE = 56;
-const THUMB_GAP = 6;
 const DISMISS_THRESHOLD = 120;
 
 // Vertical space (above the safe-area inset) reserved at the bottom for each
@@ -93,7 +102,7 @@ export function Viewer({
   // a two-finger zoom can't also drag-to-close or page to the next photo.
   const [zooming, setZooming] = useState(false);
   const pagerRef = useRef<FlatList<NearbyAsset>>(null);
-  const filmRef = useRef<ScrollView>(null);
+  const filmRef = useRef<FlatList<NearbyAsset>>(null);
 
   const translateY = useSharedValue(0);
   const backdropOpacity = useSharedValue(1);
@@ -147,10 +156,17 @@ export function Viewer({
     transform: [{ scale: 0.96 + openProgress.value * 0.04 }],
   }));
 
+  // Keep the active thumb centered as the pager moves. The first run is skipped:
+  // the filmstrip opens already centered via `contentOffset`, and animating from
+  // offset 0 on mount read as a sweep across the whole strip.
+  const filmCenteredOnce = useRef(false);
   useEffect(() => {
-    const thumbStride = THUMB_SIZE + THUMB_GAP;
-    filmRef.current?.scrollTo({
-      x: Math.max(0, index * thumbStride - width / 2 + THUMB_SIZE / 2),
+    if (!filmCenteredOnce.current) {
+      filmCenteredOnce.current = true;
+      return;
+    }
+    filmRef.current?.scrollToOffset({
+      offset: filmCenterOffset(index, width),
       animated: true,
     });
   }, [index, width]);
@@ -185,6 +201,18 @@ export function Viewer({
   const shareCurrent = () => {
     const it = items[index];
     if (it) requestShare(it.asset, it.mediaType === MediaType.VIDEO);
+  };
+
+  // Open the recreation camera for the current photo. NearbyAsset carries its
+  // location/creationTime inline, so no metadata cache lookup is needed.
+  const recreateCurrent = () => {
+    const it = items[index];
+    if (!it || it.mediaType === MediaType.VIDEO) return;
+    requestRecreation({
+      asset: it.asset,
+      creationTime: it.creationTime,
+      location: it.location,
+    });
   };
 
   return (
@@ -272,9 +300,19 @@ export function Viewer({
                 )}
               </View>
               <View style={styles.storyControls}>
-                <Pressable style={styles.storyBtn} onPress={shareCurrent} hitSlop={12}>
-                  <ShareIcon width={28} height={28} color={Ink} />
-                </Pressable>
+                {/* The cluster view is the most on-premise recreation moment
+                    (a notification just said "you're at the spot"), so the
+                    camera lives here too — photos only, like everywhere. */}
+                <View style={styles.storyActions}>
+                  {items[index]?.mediaType !== MediaType.VIDEO ? (
+                    <Pressable style={styles.storyBtn} onPress={recreateCurrent} hitSlop={12}>
+                      <CameraIcon width={26} height={26} color={Ink} />
+                    </Pressable>
+                  ) : null}
+                  <Pressable style={styles.storyBtn} onPress={shareCurrent} hitSlop={12}>
+                    <ShareIcon width={26} height={26} color={Ink} />
+                  </Pressable>
+                </View>
                 <Pressable style={styles.storyBtn} onPress={handleClose} hitSlop={12}>
                   <XIcon width={28} height={28} color={Ink} />
                 </Pressable>
@@ -286,9 +324,19 @@ export function Viewer({
                 <Pressable style={styles.closeBtn} onPress={handleClose} hitSlop={12}>
                   <XIcon width={28} height={28} color={Ink} />
                 </Pressable>
-                <Pressable style={styles.shareBtn} onPress={shareCurrent} hitSlop={12}>
-                  <ShareIcon width={28} height={28} color={Ink} />
-                </Pressable>
+                <View style={styles.topActions}>
+                  {items[index]?.mediaType !== MediaType.VIDEO ? (
+                    <Pressable
+                      style={styles.shareBtn}
+                      onPress={recreateCurrent}
+                      hitSlop={12}>
+                      <CameraIcon width={26} height={26} color={Ink} />
+                    </Pressable>
+                  ) : null}
+                  <Pressable style={styles.shareBtn} onPress={shareCurrent} hitSlop={12}>
+                    <ShareIcon width={26} height={26} color={Ink} />
+                  </Pressable>
+                </View>
               </SafeAreaView>
 
               <SafeAreaView
@@ -301,24 +349,47 @@ export function Viewer({
                       onPress={() => onOpenMemoryFeed(items[index].asset.id)}
                       style={styles.filmBtn}
                       hitSlop={12}>
-                      <FilmIcon width={28} height={28} color={Ink} />
+                      <FilmIcon width={26} height={26} color={Ink} />
                     </Pressable>
                   </View>
                 ) : null}
-                <ScrollView
+                <FlatList
                   ref={filmRef}
+                  data={items}
                   horizontal
                   showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.filmstrip}>
-                  {items.map((it, i) => (
+                  contentContainerStyle={styles.filmstrip}
+                  // Windowed on purpose: a dense area can put hundreds of items
+                  // here, and the old ScrollView mounted every thumb at open —
+                  // hundreds of simultaneous PHImageManager requests competing
+                  // with the page image. Only thumbs near the viewport mount.
+                  windowSize={3}
+                  initialNumToRender={Math.ceil(width / THUMB_STRIDE) + 4}
+                  maxToRenderPerBatch={12}
+                  keyExtractor={(it) => it.asset.id}
+                  getItemLayout={(_, i) => ({
+                    length: THUMB_STRIDE,
+                    offset: FILMSTRIP_PAD_H + i * THUMB_STRIDE,
+                    index: i,
+                  })}
+                  // Open already centered on the tapped photo — no scroll sweep.
+                  // contentOffset positions the scroll; initialScrollIndex seeds
+                  // the initial RENDER REGION at the same spot (without it the
+                  // region is cells [0, initialNumToRender) and a deep open shows
+                  // a blank strip until scroll events arrive). With contentOffset
+                  // set, the list skips its own initialScrollIndex scroll, so the
+                  // two compose — see lib/filmstrip-layout.ts.
+                  contentOffset={{ x: filmCenterOffset(startIndex, width), y: 0 }}
+                  initialScrollIndex={filmInitialScrollIndex(startIndex, width, items.length)}
+                  extraData={index}
+                  renderItem={({ item: it, index: i }) => (
                     <Pressable
-                      key={it.asset.id}
                       onPress={() => jumpTo(i)}
                       style={[styles.thumbWrap, i === index && styles.thumbWrapActive]}>
                       <FilmstripThumb item={it} />
                     </Pressable>
-                  ))}
-                </ScrollView>
+                  )}
+                />
               </SafeAreaView>
             </>
           )}
@@ -352,6 +423,17 @@ const ViewerPage = memo(function ViewerPage({
   // content:// (Android) / ph:// (iOS) via asset.id — scoped-storage safe,
   // unlike the file:// path that rendered blank on Android.
   const thumbnailUri = item.asset.id;
+  // Bounded load with the same recovery as the feed, so a stalled iCloud original
+  // surfaces "Accessing…" then Retry instead of a blank frame. Photos only: a video
+  // plays over its poster, so a slow poster shouldn't claim "couldn't load". Timers
+  // run only on the page the user is looking at (the deadline measures their wait,
+  // not how long a ±1 neighbor has been mounted).
+  const load = useIcloudImageLoad(item.asset.id, { enabled: isCurrent && isActive });
+  const stalled = load.unreachable && !isVideo;
+  const accessingLabel =
+    load.progressPct != null
+      ? `Accessing from iCloud… ${load.progressPct}%`
+      : 'Accessing from iCloud…';
   // Seed from the shared ratio cache (populated by the grid as tiles decode) so
   // the frame opens at the asset's true shape — no 3:4 default then resize snap.
   const [ratio, setRatio] = useState<number | null>(
@@ -392,8 +474,12 @@ const ViewerPage = memo(function ViewerPage({
     <View style={{ width, height, backgroundColor: Paper }}>
       <PhotoFrame screenW={width} top={top} width={frameW} height={frameH} left={frameLeft}>
         <PinchZoom onActiveChange={onZoomChange}>
-          {thumbnailUri ? (
+          {thumbnailUri && !(stalled && !load.preview) ? (
             <Image
+              // The nonce remounts the image for a fresh fetch when the user taps
+              // Retry over a still-showing blurred preview (without it the mounted
+              // view would never re-issue the stalled request).
+              key={`${item.asset.id}:${load.reloadNonce}`}
               source={{ uri: thumbnailUri }}
               style={StyleSheet.absoluteFill}
               // Tall photos are capped to a wider frame, so cover-crop them to fill
@@ -401,6 +487,8 @@ const ViewerPage = memo(function ViewerPage({
               // no crop.
               contentFit={cropped ? 'cover' : 'contain'}
               cachePolicy="memory-disk"
+              // Newly-started loads on the visible page outrank the ±1 neighbors'.
+              priority={isCurrent ? 'high' : 'low'}
               transition={0}
               // No recyclingKey: the pager is a paging FlatList (mount/unmount,
               // not view recycling), where recyclingKey only resets the image to
@@ -411,11 +499,51 @@ const ViewerPage = memo(function ViewerPage({
                   setRatio(w / h);
                   setAssetRatio(item.asset.id, w / h);
                 }
+                load.onLoad(e);
               }}
+              onError={load.onError}
+              onProgress={load.onProgress}
             />
           ) : null}
           {isVideo && isCurrent && isActive && playbackUri ? (
             <ViewerVideo uri={playbackUri} contentFit={cropped ? 'cover' : 'contain'} />
+          ) : null}
+          {/* Photos only: a stalled iCloud fetch shows "Accessing…" then a Retry
+              instead of sitting on a blank frame. Mirrors the feed card. With a
+              blurred preview showing, the full-frame states become a compact pill
+              over the photo (the blur IS a photo; the live request can still
+              complete and dissolve the pill away). */}
+          {!isVideo && !load.imageReady ? (
+            !load.showing ? (
+              stalled ? (
+                <View style={styles.loading}>
+                  <Text style={styles.loadingText}>
+                    {load.storageFull ? 'iPhone storage is full' : 'Photo couldn’t load'}
+                  </Text>
+                  {load.storageFull ? (
+                    <Text style={styles.loadingSubtext}>
+                      Free up space to load iCloud photos
+                    </Text>
+                  ) : null}
+                  <Pressable onPress={load.retry} hitSlop={12} style={styles.retryButton}>
+                    <Text style={styles.retryLabel}>Retry</Text>
+                  </Pressable>
+                </View>
+              ) : load.accessing ? (
+                <View style={styles.loading} pointerEvents="none">
+                  <ActivityIndicator color={Ink} />
+                  <Text style={styles.loadingText}>{accessingLabel}</Text>
+                </View>
+              ) : null
+            ) : stalled ? (
+              <Pressable onPress={load.retry} hitSlop={12} style={styles.pill}>
+                <Text style={styles.pillText}>Retry</Text>
+              </Pressable>
+            ) : load.accessing ? (
+              <View style={styles.pill} pointerEvents="none">
+                <Text style={styles.pillText}>{accessingLabel}</Text>
+              </View>
+            ) : null
           ) : null}
         </PinchZoom>
       </PhotoFrame>
@@ -500,9 +628,11 @@ const FilmstripThumb = memo(function FilmstripThumb({ item }: { item: NearbyAsse
         style={styles.thumb}
         contentFit="cover"
         cachePolicy="memory-disk"
+        // Thumbs never compete with the page image for the load queue.
+        priority="low"
         transition={0}
-        // No recyclingKey: filmstrip thumbs live in a ScrollView (all mounted,
-        // no recycling), so it would only add the reset-to-blank flash.
+        // No recyclingKey: filmstrip thumbs mount/unmount (windowed FlatList,
+        // no view recycling), so it would only add the reset-to-blank flash.
       />
       {isVideo ? (
         <View style={styles.thumbPlayBadge} pointerEvents="none">
@@ -514,6 +644,70 @@ const FilmstripThumb = memo(function FilmstripThumb({ item }: { item: NearbyAsse
 });
 
 const styles = StyleSheet.create({
+  // Recovery overlay over the photo frame (Ink on the Paper canvas), mirroring the
+  // feed card's loading/retry but themed for the viewer's white background.
+  loading: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loadingText: {
+    marginTop: 14,
+    fontFamily: DisplayFont,
+    color: Ink,
+    fontSize: 12,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  // Second line under the storage-full title; quieter than the title.
+  loadingSubtext: {
+    marginTop: 6,
+    fontFamily: DisplayFont,
+    color: Ink,
+    opacity: 0.65,
+    fontSize: 10,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+    textAlign: 'center',
+    paddingHorizontal: 24,
+  },
+  retryButton: {
+    marginTop: 16,
+    borderWidth: 2,
+    borderColor: Ink,
+    paddingHorizontal: 18,
+    paddingVertical: 8,
+  },
+  retryLabel: {
+    fontFamily: DisplayFont,
+    color: Ink,
+    fontSize: 12,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  // Compact hint/Retry pill shown over the blurred preview (bottom-center of the
+  // frame) while the full image is still downloading or has stalled. Dark scrim
+  // + Paper text: it sits on the photo, not the white canvas.
+  pill: {
+    position: 'absolute',
+    bottom: 14,
+    alignSelf: 'center',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+  },
+  pillText: {
+    fontFamily: DisplayFont,
+    color: Paper,
+    fontSize: 11,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
   pageFallback: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -584,6 +778,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     marginTop: 2,
   },
+  // Left cluster of the story bar: recreate + share; the X stays isolated on
+  // the right so close is never next to an action.
+  storyActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
   storyBtn: {
     paddingHorizontal: 4,
     paddingVertical: 8,
@@ -609,6 +810,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
   },
+  // Right-side top-bar group: recreate (photos only) + share.
+  topActions: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
   bottomBar: {
     position: 'absolute',
     bottom: 0,
@@ -625,14 +831,16 @@ const styles = StyleSheet.create({
     padding: 6,
   },
   filmstrip: {
-    gap: THUMB_GAP,
-    paddingHorizontal: 12,
+    // Spacing comes from thumbWrap's marginRight (not `gap`) so the FlatList's
+    // fixed-stride getItemLayout math stays exact.
+    paddingHorizontal: FILMSTRIP_PAD_H,
     paddingTop: 8,
     paddingBottom: 16,
   },
   thumbWrap: {
     width: THUMB_SIZE,
     height: THUMB_SIZE,
+    marginRight: THUMB_GAP,
     borderRadius: 6,
     overflow: 'hidden',
     borderWidth: 2,

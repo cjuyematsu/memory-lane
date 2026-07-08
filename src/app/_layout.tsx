@@ -26,14 +26,20 @@ import { MemoryBanner } from '@/components/notifications/memory-banner';
 import { NearbyMemoriesGreeter } from '@/components/notifications/nearby-memories-greeter';
 import { NotificationOrchestrator } from '@/components/notifications/notification-orchestrator';
 import { OnboardingFlow } from '@/components/onboarding/onboarding-flow';
+import { RecreationHost } from '@/components/recreate/recreation-host';
 import { ShareHost } from '@/components/share/share-host';
 import { Paper } from '@/constants/theme';
 import { useOnboardingStatus } from '@/hooks/use-onboarding-status';
+import { hydrateAssetRatios } from '@/lib/asset-ratio-cache';
 import { configureImageCache, installMemoryCacheReaper } from '@/lib/image-cache';
 
 // Bound the expo-image disk cache once, before any photo renders, so it can't
 // grow without limit as the feed/shuffle decode images across the library.
 configureImageCache();
+// Warm the persisted aspect-ratio cache so previously-seen photos open in the
+// right contain/cover fit from the very first render of a launch (fire-and-
+// forget; anything not hydrated in time self-corrects via its own onLoad).
+hydrateAssetRatios();
 
 // Hold the native splash (the Polaroid, see app.json) until React paints, then
 // hand it off to the in-app polaroid loader below — no auto-hide into a white
@@ -120,6 +126,10 @@ export default function RootLayout() {
             <Slot />
           </ErrorBoundary>
         ) : null}
+        {/* Photo-recreation flow (camera + review). After <Slot/> so it covers
+            the app, before MemoryBanner/ShareHost so those stay on top (the
+            share sheet must render over the review screen). */}
+        {onboarding === 'done' ? <RecreationHost /> : null}
         <MemoryBanner />
         <ShareHost />
         {/* Full-screen first-run onboarding; replaces the app until finished,

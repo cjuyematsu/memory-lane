@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import BellIcon from '@/assets/icons/bell.svg';
 import RefreshIcon from '@/assets/icons/refresh.svg';
+import SettingsIcon from '@/assets/icons/settings.svg';
 import { LoadingPolaroid } from '@/components/brand/loading-polaroid';
 import { frameTop } from '@/components/feed/photo-frame';
 import { ClusterView } from '@/components/near-me/cluster-view';
@@ -223,14 +223,16 @@ export function NearMe({
   // re-rendered just because NearMe re-rendered for some unrelated reason.
   const openViewer = useCallback((i: number) => setViewerIndex(i), []);
 
-  // Floats at the lower-right of the grid as a white pill with a dark bell, so
-  // it stays obvious over the photos and matches the gallery theme.
+  // Floats at the lower-right of the grid as a white pill with a dark gear
+  // (the sheet outgrew notifications: it now also holds recreations and the
+  // onboarding replay), so it stays obvious over the photos and matches the
+  // gallery theme.
   const notificationsButton = (
     <Pressable
       onPress={() => setSettingsOpen(true)}
       style={[styles.notificationsBtn, { bottom: insets.bottom + 16, right: FrameMargin + 6 }]}
       hitSlop={12}>
-      <BellIcon width={22} height={22} fill={Ink} />
+      <SettingsIcon width={22} height={22} fill={Ink} />
     </Pressable>
   );
 
@@ -357,6 +359,7 @@ export function NearMe({
         paddingBottom={insets.bottom}
         onRefresh={onUserRefresh}
         refreshing={refreshing}
+        isActive={isActive}
       />
     ) : displayItems !== null ? (
       <SafeAreaView style={styles.empty}>

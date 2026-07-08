@@ -20,13 +20,16 @@ import ArrowLeftIcon from '@/assets/icons/arrow-left.svg';
 import { SpectrumRule } from '@/components/brand/spectrum-rule';
 import { Feed } from '@/components/feed/feed';
 import { NearMe } from '@/components/near-me/near-me';
+import { RecreationsGallery } from '@/components/recreate/recreations-gallery';
 import { DisplayFont, Ink, Paper } from '@/constants/theme';
+import { subscribeGalleryRequest } from '@/lib/gallery-request';
 import { subscribeNearMeRequest } from '@/lib/near-me-request';
 import {
   getPendingCluster,
   subscribePendingCluster,
   usePendingCluster,
 } from '@/lib/pending-cluster';
+import { useRecreationTarget } from '@/lib/recreation-request';
 
 type Tab = 'cameraRoll' | 'nearMe';
 
@@ -53,10 +56,16 @@ export function TopTabs() {
   // True while a feed card (main pager or memory overlay) is being pinch-zoomed,
   // so a two-finger zoom can't also swipe between tabs or close the overlay.
   const [feedZooming, setFeedZooming] = useState(false);
+  // The recreations collection, opened from the tab bar's center button.
+  const [galleryOpen, setGalleryOpen] = useState(false);
 
   const tabX = useSharedValue(0);
   const overlayX = useSharedValue(width);
   const pendingCluster = usePendingCluster();
+  // The root-mounted RecreationHost covers the screen while a recreation is in
+  // flight, but RNGH gestures receive touches independent of overlay coverage
+  // (see the tabPan comment below) — so the pager must be disabled explicitly.
+  const recreationOpen = useRecreationTarget() != null;
 
   useEffect(
     () =>
@@ -69,6 +78,9 @@ export function TopTabs() {
   // The app-open "N memories near you" banner switches to Near Me without
   // opening a cluster view (so the user lands on the grid, not a single place).
   useEffect(() => subscribeNearMeRequest(() => setTab('nearMe')), []);
+
+  // The Settings sheet's "Your recreations" row opens the gallery overlay.
+  useEffect(() => subscribeGalleryRequest(() => setGalleryOpen(true)), []);
 
   // Animate the pager when `tab` changes (whether by gesture or tap).
   useEffect(() => {
@@ -99,7 +111,14 @@ export function TopTabs() {
     // Disabled while a memory feed or the notification cluster view is open,
     // so you can't swipe between tabs to escape memories — you must back out
     // of the memory view first (and out of any open photo before that).
-    .enabled(memoryEntry == null && !pendingCluster && !nearMeViewerOpen && !feedZooming)
+    .enabled(
+      memoryEntry == null &&
+        !pendingCluster &&
+        !nearMeViewerOpen &&
+        !feedZooming &&
+        !recreationOpen &&
+        !galleryOpen
+    )
     .activeOffsetX([-15, 15])
     .failOffsetY([-20, 20])
     .onUpdate((e) => {
@@ -221,6 +240,12 @@ export function TopTabs() {
           <SpectrumRule width={width} height={3} rx={0} />
         </SafeAreaView>
       ) : null}
+
+      {galleryOpen ? (
+        <View style={styles.galleryOverlay}>
+          <RecreationsGallery onClose={() => setGalleryOpen(false)} />
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -275,6 +300,16 @@ const styles = StyleSheet.create({
   },
   labelActive: {
     textDecorationLine: 'underline',
+  },
+  // Above the tab bar (barWrap zIndex 10) and every pane overlay.
+  galleryOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 30,
+    backgroundColor: Paper,
   },
   backWrap: {
     position: 'absolute',
