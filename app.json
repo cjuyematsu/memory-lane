@@ -83,6 +83,15 @@
           "color": "#EE5D6C"
         }
       ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "PastPic uses the camera so you can retake an old photo from the same spot.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false,
+          "barcodeScannerEnabled": false
+        }
+      ],
       "expo-video",
       "expo-sharing"
     ],
