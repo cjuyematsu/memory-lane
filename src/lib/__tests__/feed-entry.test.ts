@@ -1,4 +1,4 @@
-import { entryCandidateOrder } from '@/lib/feed-entry';
+import { entryCandidateOrder, refillCandidateIndex } from '@/lib/feed-entry';
 
 // Deterministic RNG: cycles through the given values.
 function seq(values: number[]): () => number {
@@ -42,5 +42,34 @@ describe('entryCandidateOrder', () => {
     // on 90 and 40; nothing else — in particular not 0..N newest — appears.
     const order = entryCandidateOrder(100, seq([0.9, 0.4]), 4, 0);
     expect(order).toEqual([90, 40]);
+  });
+});
+
+describe('refillCandidateIndex', () => {
+  it('samples the whole range when wantOld is false', () => {
+    expect(refillCandidateIndex(900, false, () => 0)).toBe(0);
+    expect(refillCandidateIndex(900, false, () => 0.999)).toBe(899);
+  });
+
+  it('samples only the older two-thirds when wantOld is true', () => {
+    // Newest-first library of 900: older two-thirds = indices 300..899.
+    expect(refillCandidateIndex(900, true, () => 0)).toBe(300);
+    expect(refillCandidateIndex(900, true, () => 0.999)).toBe(899);
+  });
+
+  it('stays in range across the wantOld boundary for tiny libraries', () => {
+    for (const total of [1, 2, 3, 4]) {
+      for (const r of [0, 0.5, 0.999]) {
+        const idx = refillCandidateIndex(total, true, () => r);
+        expect(idx).toBeGreaterThanOrEqual(0);
+        expect(idx).toBeLessThan(total);
+      }
+    }
+  });
+
+  it('an old sample can never land in the newest third', () => {
+    for (let i = 0; i < 200; i++) {
+      expect(refillCandidateIndex(3000, true)).toBeGreaterThanOrEqual(1000);
+    }
   });
 });

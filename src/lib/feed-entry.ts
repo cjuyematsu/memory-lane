@@ -23,3 +23,21 @@ export function entryCandidateOrder(
   for (let i = 0; i < recentN && i < total; i += 1) push(i);
   return order;
 }
+
+// Which index the shuffle-queue refill should sample next. `wantOld` biases
+// into the older two-thirds of the (newest-first) library: one queue slot per
+// refill is reserved for an old sample, so older photos enter the rotation
+// from the very first shuffles instead of arriving only via the slow
+// old-memory download trickle (the early-session feed skewed hard to recent
+// photos, since only those were instantly renderable). Pure + injectable RNG.
+export function refillCandidateIndex(
+  total: number,
+  wantOld: boolean,
+  rand: () => number = Math.random
+): number {
+  if (wantOld) {
+    const start = Math.floor(total / 3);
+    if (start < total) return start + Math.floor(rand() * (total - start));
+  }
+  return Math.floor(rand() * total);
+}

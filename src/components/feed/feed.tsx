@@ -49,7 +49,7 @@ import { useMediaPermission } from '@/hooks/use-media-permission';
 import { prefetchReverseGeocode } from '@/hooks/use-reverse-geocode';
 import { getAssetRatio, setAssetRatio } from '@/lib/asset-ratio-cache';
 import { nextOnDeviceIndex } from '@/lib/feed-on-device';
-import { entryCandidateOrder } from '@/lib/feed-entry';
+import { entryCandidateOrder, refillCandidateIndex } from '@/lib/feed-entry';
 import { pendingWarmDownload, planWarmMounts, type WarmEntry } from '@/lib/feed-warm-plan';
 import { isPlaceholderLoad } from '@/lib/image-load-event';
 import { withTimeoutDefault } from '@/lib/async-safety';
@@ -61,6 +61,7 @@ import {
   WARM_PENDING_DOWNLOAD_MS,
 } from '@/lib/loading-timeouts';
 import { getWarmedEntryId } from '@/lib/feed-entry-warm';
+import { markShown, shouldSkipShown } from '@/lib/feed-shown-history';
 import { cardLoadPriority } from '@/lib/feed-priority';
 import { markFirstPaint } from '@/lib/first-paint';
 import { requestRecreation } from '@/lib/recreation-request';
@@ -359,9 +360,18 @@ export function Feed({
         // residency cache hits; a downloaded old memory still reads as in-cloud
         // there, which just routes it through the (instantly satisfied, the
         // bytes are cached) download slot.
+        // `added` doubles as the reserved-old-slot marker: a pool injection is
+        // itself an old photo, so the random loop below only forces an
+        // older-two-thirds sample when no old memory was injected.
         while (oldMemoryPool.length > 0) {
           const id = oldMemoryPool.shift()!;
-          if (exclude.has(id) || !assets.some((a) => a.id === id)) continue;
+          if (
+            exclude.has(id) ||
+            shouldSkipShown(id, assets.length) ||
+            !assets.some((a) => a.id === id)
+          ) {
+            continue;
+          }
           exclude.add(id);
           const asset = assets.find((a) => a.id === id)!;
           warmAssetMetadata(asset);
@@ -370,11 +380,19 @@ export function Feed({
           added = true;
           break;
         }
+        // At most one forced old sample per refill, and only on ~half of
+        // refills: forcing one EVERY refill drifted the whole rotation old
+        // ("too concentrated on older pictures"); a coin flip plus uniform
+        // sampling the rest of the time reads as an even old/recent blend.
+        let oldSlotFilled = added || Math.random() >= 0.5;
         // Re-read the ref each iteration: a shuffle can swap the queue array
         // while we're awaiting a cloud check.
         for (let i = 0; i < 30 && shuffleQueueRef.current.length < SHUFFLE_QUEUE_SIZE; i++) {
-          const candidate = assets[Math.floor(Math.random() * assets.length)];
+          const wantOld = !oldSlotFilled;
+          const candidate = assets[refillCandidateIndex(assets.length, wantOld)];
           if (exclude.has(candidate.id)) continue;
+          if (shouldSkipShown(candidate.id, assets.length)) continue;
+          if (wantOld) oldSlotFilled = true;
           exclude.add(candidate.id);
           // A timed-out probe answers `true` (pessimistic, uncached) — recorded
           // as-is so the entry waits its turn in the download slot.
@@ -466,6 +484,10 @@ export function Feed({
       const a = assets[idx];
       if (!a || a.id === currentId) continue;
       if (oldMemoryPool.includes(a.id) || shuffleQueueRef.current.includes(a.id)) continue;
+      // Never re-pick a photo the user just saw — a downloaded old memory still
+      // reads as iCloud-resident in the stale residency cache, so without this
+      // it could be "re-downloaded" (instantly, from cache) and re-shown.
+      if (shouldSkipShown(a.id, assets.length)) continue;
       const inCloud = await loadAssetIsInCloud(a);
       if (inCloud) return a.id;
       oldMemoryPool.push(a.id);
@@ -668,6 +690,13 @@ export function Feed({
     if (currentId && rememberLastPosition) rememberedAssetId = currentId;
   }, [currentId, rememberLastPosition]);
 
+  // Every photo that lands on screen (shuffle commit, swipe, find-on-device
+  // jump, memory-overlay view) enters the shown-history ring, so no sampler
+  // can bring it straight back.
+  useEffect(() => {
+    if (currentId) markShown(currentId);
+  }, [currentId]);
+
   // Safety net: if no card ever signals ready (e.g., the entry asset got
   // deleted, or a stuck iCloud download), drop the splash latch after a couple
   // seconds so the user isn't stuck staring at a stale image — and release the
@@ -724,10 +753,19 @@ export function Feed({
 
     if (!pickedId) {
       // Cold path (empty/stale queue): pick fresh, skipping the current photo
-      // so a shuffle always visibly changes something. Stage immediately — the
-      // overlay's paint gating already hides the decode, and waiting on a
-      // prefetch here only delayed it.
+      // (so a shuffle always visibly changes something) and recently shown
+      // ones (bounded retries — falls through on a small library). Stage
+      // immediately — the overlay's paint gating already hides the decode, and
+      // waiting on a prefetch here only delayed it.
       let idx = Math.floor(Math.random() * assets.length);
+      for (
+        let tries = 0;
+        tries < 10 &&
+        (assets[idx].id === currentId || shouldSkipShown(assets[idx].id, assets.length));
+        tries++
+      ) {
+        idx = Math.floor(Math.random() * assets.length);
+      }
       if (assets.length > 1 && assets[idx].id === currentId) {
         idx = (idx + 1) % assets.length;
       }
@@ -1160,7 +1198,7 @@ export function Feed({
           the memory overlay hides shuffle). */}
       {isReady && currentId ? (
         <View
-          style={[styles.actionBar, { top: frame.top + frame.height + 80 }]}
+          style={[styles.actionBar, { top: frame.top + frame.height + 72 }]}
           pointerEvents="box-none">
           <View style={styles.actionSlot}>
             <Pressable style={styles.actionBtn} onPress={handleShare} hitSlop={12}>
