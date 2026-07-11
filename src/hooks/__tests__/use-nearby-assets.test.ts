@@ -324,3 +324,34 @@ describe('nearbyCount', () => {
     expect(nearbyCount(index, origin)).toBe(computeCount(index, ['far-anchor', 'uv']));
   });
 });
+
+describe('computeNearby at library scale', () => {
+  it('handles a 60k-asset index correctly and fast (the warm-launch grid populate)', () => {
+    const origin = { latitude: 40, longitude: -75 };
+    const located: AssetIndex['located'] = [];
+    const assets: Asset[] = [];
+    const expectNear: string[] = [];
+    for (let i = 0; i < 60000; i++) {
+      const id = `a${i}`;
+      assets.push({ id } as Asset);
+      // Every 1000th asset sits ~111m north (inside the 150m default radius);
+      // the rest are scattered far away across the globe.
+      const near = i % 1000 === 0;
+      if (near) expectNear.push(id);
+      located.push({
+        id,
+        lat: near ? 40.001 : ((i * 7) % 140) - 70,
+        lng: near ? -75 : ((i * 13) % 340) - 170,
+        creationTime: i,
+        mediaType: MediaType.IMAGE,
+      });
+    }
+    const index: AssetIndex = { located, unlocatedVideos: [], processedIds: assets.map((a) => a.id) };
+    const startedAt = Date.now();
+    const { photos } = computeNearby(index, assets, origin);
+    const elapsed = Date.now() - startedAt;
+    expect(photos.map((p) => p.asset.id).sort()).toEqual(expectNear.sort());
+    // Generous bound (CI-safe): guards against an accidentally quadratic pass.
+    expect(elapsed).toBeLessThan(2000);
+  });
+});

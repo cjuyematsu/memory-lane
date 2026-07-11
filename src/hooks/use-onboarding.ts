@@ -33,18 +33,33 @@ function notify() {
   for (const cb of subscribers) cb(cached);
 }
 
+// Pure: parse persisted state without trusting field types — a garbage `step`
+// must not strand the resume seed on a nonexistent page, and a non-boolean
+// `completed` must not skip (or trap) the whole flow.
+export function parseOnboardingState(text: string | null): OnboardingState {
+  const out = { ...DEFAULTS };
+  if (text == null) return out;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return out;
+    const o = parsed as Record<string, unknown>;
+    if (typeof o.completed === 'boolean') out.completed = o.completed;
+    if (typeof o.started === 'boolean') out.started = o.started;
+    if (typeof o.step === 'number' && Number.isInteger(o.step) && o.step >= 0) {
+      out.step = o.step;
+    }
+    return out;
+  } catch {
+    return out;
+  }
+}
+
 function loadFromDisk(): Promise<OnboardingState> {
   if (cached) return Promise.resolve(cached);
   if (inflight) return inflight;
   inflight = (async () => {
     try {
-      const text = await readPersisted(FILE_NAME);
-      if (text == null) {
-        cached = { ...DEFAULTS };
-        return cached;
-      }
-      const parsed = JSON.parse(text) as Partial<OnboardingState>;
-      cached = { ...DEFAULTS, ...parsed };
+      cached = parseOnboardingState(await readPersisted(FILE_NAME));
       return cached;
     } catch {
       cached = { ...DEFAULTS };

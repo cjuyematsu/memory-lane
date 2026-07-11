@@ -6,6 +6,7 @@ import {
   Modal,
   Platform,
   Pressable,
+  Share,
   StyleSheet,
   Switch,
   Text,
@@ -16,6 +17,7 @@ import { CooldownPicker } from '@/components/notifications/cooldown-picker';
 import { PermissionsPanel } from '@/components/notifications/permissions-sheet';
 import { DisplayFont, Ink, Paper } from '@/constants/theme';
 import { diagnoseAndroidMetadata } from '@/lib/android-metadata-diagnostic';
+import { getCrashLogText } from '@/lib/crash-log';
 import {
   fireTestNotification,
   inspectRadiiHere,
@@ -27,7 +29,6 @@ import {
   setPlaceCooldownMs,
   useNotificationSettings,
 } from '@/hooks/use-notification-settings';
-import { requestRecreationsGallery } from '@/lib/gallery-request';
 import {
   getPermissionState,
   requestAllPermissions,
@@ -35,6 +36,10 @@ import {
 } from '@/hooks/use-permission-flow';
 
 type View_ = 'main' | 'permissions';
+
+// Demo scaffolding for launch videos: flip to true to show the dev trigger
+// buttons in a Release build. Must be false for any App Store submission.
+const DEMO_BUILD = false;
 
 export function SettingsSheet({
   visible,
@@ -134,7 +139,18 @@ export function SettingsSheet({
             <PermissionsPanel onBack={() => setView('main')} />
           ) : (
             <>
-              <Text style={styles.title}>Settings</Text>
+              {/* Hidden diagnostics escape hatch: long-pressing the title
+                  shares the on-disk crash log, so a tester can send it without
+                  any visible debug UI. */}
+              <Text
+                style={styles.title}
+                onLongPress={() => {
+                  getCrashLogText()
+                    .then((text) => Share.share({ message: text }))
+                    .catch(() => {});
+                }}>
+                Settings
+              </Text>
 
               <View style={styles.block}>
                 <View style={styles.row}>
@@ -188,25 +204,17 @@ export function SettingsSheet({
                 </Pressable>
               ) : null}
 
-              {/* Grouped nav rows: a cohesive settings list, not scattered pills. */}
+              {/* Grouped nav rows: a cohesive settings list, not scattered pills.
+                  (Recreations moved out to their own tab in the top pager.) */}
               <View style={styles.navGroup}>
                 <NavRow label="Permissions" first onPress={() => setView('permissions')} />
-                <NavRow
-                  label="Your recreations"
-                  onPress={() => {
-                    // The gallery overlay is owned by TopTabs; close the sheet
-                    // so it isn't stacked under this modal.
-                    onClose();
-                    requestRecreationsGallery();
-                  }}
-                />
               </View>
 
               <Text style={styles.privacyNote}>
                 Everything stays on your phone. Your photos and location never leave your device.
               </Text>
 
-              {__DEV__ ? (
+              {__DEV__ || DEMO_BUILD ? (
                 <View style={styles.devRow}>
                   <Pressable
                     style={styles.devButton}

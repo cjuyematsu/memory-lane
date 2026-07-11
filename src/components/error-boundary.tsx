@@ -2,6 +2,7 @@ import { Component, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { DisplayFont, Ink, Paper } from '@/constants/theme';
+import { logBoundaryError } from '@/lib/crash-log';
 
 type Props = {
   children: ReactNode;
@@ -49,6 +50,20 @@ export class ErrorBoundary extends Component<Props, State> {
     }
     return this.props.children;
   }
+}
+
+// For root overlays (banners, share/recreation hosts, renderless
+// orchestrators): a throw in one must disappear that overlay, not take down the
+// app or its sibling overlays — so each gets its own boundary with a null
+// fallback. The dead overlay stays unmounted until the next launch
+// (auto-resetting risks a crash loop). Every catch lands in the on-disk crash
+// log tagged with the overlay's name.
+export function OverlayBoundary({ name, children }: { name: string; children: ReactNode }) {
+  return (
+    <ErrorBoundary fallback={() => null} onError={(error) => logBoundaryError(name, error)}>
+      {children}
+    </ErrorBoundary>
+  );
 }
 
 const styles = StyleSheet.create({

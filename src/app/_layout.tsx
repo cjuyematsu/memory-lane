@@ -12,6 +12,7 @@ import { DarkTheme, DefaultTheme, Slot, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StyleSheet, useColorScheme } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -20,7 +21,7 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import { LoadingPolaroid } from '@/components/brand/loading-polaroid';
-import { ErrorBoundary } from '@/components/error-boundary';
+import { ErrorBoundary, OverlayBoundary } from '@/components/error-boundary';
 import { FeedEntryWarmHost } from '@/components/feed/feed-entry-warm-host';
 import { MemoryBanner } from '@/components/notifications/memory-banner';
 import { NearbyMemoriesGreeter } from '@/components/notifications/nearby-memories-greeter';
@@ -31,8 +32,15 @@ import { ShareHost } from '@/components/share/share-host';
 import { Paper } from '@/constants/theme';
 import { useOnboardingStatus } from '@/hooks/use-onboarding-status';
 import { hydrateAssetRatios } from '@/lib/asset-ratio-cache';
+import { initCrashReporting, logBoundaryError } from '@/lib/crash-log';
 import { configureImageCache, installMemoryCacheReaper } from '@/lib/image-cache';
+import { FONT_LOAD_MS } from '@/lib/loading-timeouts';
 
+// Install the global error handler + rejection tracker before anything else
+// can throw, so even a boot-path failure lands in the on-disk crash log.
+// (Imports hoist, so the geofence-manager defineTask registration above still
+// runs first.)
+initCrashReporting();
 // Bound the expo-image disk cache once, before any photo renders, so it can't
 // grow without limit as the feed/shuffle decode images across the library.
 configureImageCache();
@@ -77,7 +85,20 @@ export default function RootLayout() {
   // Hold the content until the font is ready so the first paint already uses it
   // (otherwise the nav flashes the fallback font until something re-renders).
   // `|| fontError` so a load failure still shows the app (with the fallback).
-  const ready = fontsLoaded || !!fontError;
+  //
+  // `|| fontTimedOut` is the load-bearing safety net: on Android release builds
+  // `useFonts` can hang without ever resolving OR rejecting, and `ready` gates
+  // BOTH this loader and the onboarding render — so a hung font load strands the
+  // user on the boot Polaroid forever. Bound it like every other cold-start gate
+  // (see use-onboarding-status.ts): after FONT_LOAD_MS, proceed with the system
+  // fallback font rather than hang.
+  const [fontTimedOut, setFontTimedOut] = useState(false);
+  useEffect(() => {
+    if (fontsLoaded || fontError) return;
+    const t = setTimeout(() => setFontTimedOut(true), FONT_LOAD_MS);
+    return () => clearTimeout(t);
+  }, [fontsLoaded, fontError]);
+  const ready = fontsLoaded || !!fontError || fontTimedOut;
 
   // Hand the native splash off to the in-app polaroid loader as soon as React
   // paints (the loader covers, so there's no gap) — from here the loader is one
@@ -112,38 +133,69 @@ export default function RootLayout() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: Paper }}>
-      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-        <NotificationOrchestrator />
-        {/* Off-screen, decodes the photo the onboarding prewarm picked for the
-            Camera Roll's first card, so the feed opens on a warm cache hit.
-            Renderless on every normal launch (nothing warmed). */}
-        <FeedEntryWarmHost />
-        {/* Greeter touches location and can pop a banner — keep it out of the
-            tree until onboarding is done, alongside the app. */}
-        {onboarding === 'done' ? <NearbyMemoriesGreeter /> : null}
-        {ready && onboarding === 'done' ? (
-          <ErrorBoundary>
-            <Slot />
-          </ErrorBoundary>
-        ) : null}
-        {/* Photo-recreation flow (camera + review). After <Slot/> so it covers
-            the app, before MemoryBanner/ShareHost so those stay on top (the
-            share sheet must render over the review screen). */}
-        {onboarding === 'done' ? <RecreationHost /> : null}
-        <MemoryBanner />
-        <ShareHost />
-        {/* Full-screen first-run onboarding; replaces the app until finished,
-            and sits below the boot loader so the Polaroid covers the
-            pre-decision flash. */}
-        {ready && onboarding === 'active' ? <OnboardingFlow /> : null}
-        {loaderMounted ? (
-          <Animated.View
-            style={[styles.loaderOverlay, loaderStyle]}
-            pointerEvents={done ? 'none' : 'auto'}>
-            <LoadingPolaroid />
-          </Animated.View>
-        ) : null}
-      </ThemeProvider>
+      <SafeAreaProvider>
+        <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+          {/* Each root overlay gets its OWN boundary (not one around the group)
+              so a throw in one disappears just that overlay — the orchestrator
+              must survive a ShareCard layout throw and vice versa. */}
+          <OverlayBoundary name="notificationOrchestrator">
+            <NotificationOrchestrator />
+          </OverlayBoundary>
+          {/* Off-screen, decodes the photo the onboarding prewarm picked for the
+              Camera Roll's first card, so the feed opens on a warm cache hit.
+              Renderless on every normal launch (nothing warmed). */}
+          <OverlayBoundary name="feedEntryWarmHost">
+            <FeedEntryWarmHost />
+          </OverlayBoundary>
+          {/* Greeter touches location and can pop a banner — keep it out of the
+              tree until onboarding is done, alongside the app. */}
+          {onboarding === 'done' ? (
+            <OverlayBoundary name="nearbyGreeter">
+              <NearbyMemoriesGreeter />
+            </OverlayBoundary>
+          ) : null}
+          {ready && onboarding === 'done' ? (
+            <ErrorBoundary onError={(error) => logBoundaryError('slot', error)}>
+              <Slot />
+            </ErrorBoundary>
+          ) : null}
+          {/* Photo-recreation flow (camera + review). After <Slot/> so it covers
+              the app, before MemoryBanner/ShareHost so those stay on top (the
+              share sheet must render over the review screen). */}
+          {onboarding === 'done' ? (
+            <OverlayBoundary name="recreationHost">
+              <RecreationHost />
+            </OverlayBoundary>
+          ) : null}
+          <OverlayBoundary name="memoryBanner">
+            <MemoryBanner />
+          </OverlayBoundary>
+          <OverlayBoundary name="shareHost">
+            <ShareHost />
+          </OverlayBoundary>
+          {/* Full-screen first-run onboarding; replaces the app until finished,
+              and sits below the boot loader so the Polaroid covers the
+              pre-decision flash. NOT an OverlayBoundary: failing to null would
+              strand a new user on blank Paper (onboarding withholds the app),
+              so it keeps the default full-screen fallback whose Reload remounts
+              the flow and resumes from the persisted step. */}
+          {ready && onboarding === 'active' ? (
+            <ErrorBoundary onError={(error) => logBoundaryError('onboarding', error)}>
+              <OnboardingFlow />
+            </ErrorBoundary>
+          ) : null}
+          {loaderMounted ? (
+            <Animated.View
+              style={[styles.loaderOverlay, loaderStyle]}
+              pointerEvents={done ? 'none' : 'auto'}>
+              {/* A loader throw should reveal the app, not kill it. */}
+              <OverlayBoundary name="bootLoader">
+                <LoadingPolaroid />
+              </OverlayBoundary>
+            </Animated.View>
+          ) : null}
+        </ThemeProvider>
+      </SafeAreaProvider>
     </GestureHandlerRootView>
   );
 }

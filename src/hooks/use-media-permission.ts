@@ -70,6 +70,19 @@ export async function ensureMediaPermission(): Promise<MediaLibrary.PermissionRe
   return res;
 }
 
+// Terminal state for when every bounded read attempt has failed: without it the
+// tabs sit on the loading Polaroid indefinitely (seen on Android when a boot-time
+// native permission stall left getPermissionsAsync never settling). Publishing a
+// synthetic not-granted response drops the UI to the existing "Grant access"
+// locked screens instead — the button there does a real user-gesture request,
+// and any later successful read overwrites this.
+const UNRESOLVED_FALLBACK = {
+  granted: false,
+  canAskAgain: true,
+  status: 'undetermined',
+  expires: 'never',
+} as MediaLibrary.PermissionResponse;
+
 // Re-read the permission without prompting. This is what lets the app unlock
 // after the user grants access in system Settings (via the "Open Settings"
 // fallback, when canAskAgain is false) and returns — otherwise the cached
@@ -77,7 +90,11 @@ export async function ensureMediaPermission(): Promise<MediaLibrary.PermissionRe
 // notifies when the meaningful state actually changed, to avoid re-rendering
 // consumers on every foreground.
 async function recheck(): Promise<void> {
-  const res = await MediaLibrary.getPermissionsAsync(false, MEDIA_PERMISSIONS);
+  const res = await withTimeout(
+    MediaLibrary.getPermissionsAsync(false, MEDIA_PERMISSIONS),
+    MEDIA_PERMISSION_MS,
+    'media permission recheck'
+  );
   if (
     cached &&
     cached.granted === res.granted &&
@@ -93,7 +110,8 @@ function ensureAppStateListener() {
   if (appStateSubscribed) return;
   appStateSubscribed = true;
   AppState.addEventListener('change', (state) => {
-    if (state === 'active') recheck();
+    // A timed-out recheck keeps whatever is cached; the next foreground retries.
+    if (state === 'active') recheck().catch(() => {});
   });
 }
 
@@ -109,12 +127,18 @@ export function useMediaPermission(): [
     if (cached == null && !inflight) {
       // Silent bounded auto-retry so a transient cold-launch stall self-heals
       // instead of pinning both tabs on the loading Polaroid. If every attempt
-      // still fails, the AppState foreground `recheck` retries on the next
-      // 'active', so the app recovers on its own.
+      // still fails, publish the not-granted fallback so the tabs drop to their
+      // locked "Grant access" screens rather than spin forever; the AppState
+      // foreground `recheck` still retries the real read on the next 'active'.
       inflight = withRetry(refresh, COLD_START_RETRIES, COLD_START_RETRY_BASE_MS).finally(() => {
         inflight = null;
       });
-      inflight.catch(() => {});
+      inflight.catch(() => {
+        if (cached == null) {
+          cached = UNRESOLVED_FALLBACK;
+          notify();
+        }
+      });
     }
     return () => {
       subscribers.delete(cb);

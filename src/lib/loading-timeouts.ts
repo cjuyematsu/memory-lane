@@ -40,6 +40,10 @@ export const LOCATION_FIX_MS = 8000;
 export const LOCATE_READ_MS = 6000;
 export const ONBOARDING_PROBE_MS = 4000;
 export const CONNECTIVITY_CHECK_MS = 2000;
+/** Upper bound on waiting for the display font (`useFonts`) before proceeding
+ *  with the system fallback. Without this the boot Polaroid strands forever if
+ *  `useFonts` never settles — as it does on Android release builds. */
+export const FONT_LOAD_MS = 3000;
 
 // ── Silent auto-retry policy for cold-start calls (then the error/Retry UI) ──
 export const COLD_START_RETRIES = 3;

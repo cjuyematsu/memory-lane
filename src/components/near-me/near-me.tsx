@@ -2,16 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import RefreshIcon from '@/assets/icons/refresh.svg';
-import SettingsIcon from '@/assets/icons/settings.svg';
 import { LoadingPolaroid } from '@/components/brand/loading-polaroid';
 import { frameTop } from '@/components/feed/photo-frame';
 import { ClusterView } from '@/components/near-me/cluster-view';
 import { Grid } from '@/components/near-me/grid';
 import { SetupNote } from '@/components/near-me/setup-note';
 import { Viewer } from '@/components/near-me/viewer';
-import { SettingsSheet } from '@/components/notifications/settings-sheet';
-import { DisplayFont, FrameMargin, Ink, Paper } from '@/constants/theme';
+import { DisplayFont, Ink, Paper } from '@/constants/theme';
+import { markDecodeBurst } from '@/lib/decode-burst';
 import { subscribeNearMeRequest } from '@/lib/near-me-request';
 import { setPendingCluster, usePendingCluster } from '@/lib/pending-cluster';
 import { useAssetFeed } from '@/hooks/use-asset-feed';
@@ -146,6 +144,14 @@ export function NearMe({
     setDisplayItems(items);
   }
 
+  // Adopting a snapshot fans out a dozen simultaneous ph:// grid decodes; mark
+  // the decode burst so the located-index sweep down-shifts and defers its
+  // checkpoint writes instead of peaking alongside them (the June 30 field
+  // crash was this collision at the ~8s GPS-fix boundary on a warm launch).
+  useEffect(() => {
+    if (displayItems && displayItems.length > 0) markDecodeBurst();
+  }, [displayItems]);
+
   // Re-fetch on app foreground ("open the app") — re-snapshot, no spinner.
   useEffect(() => {
     const sub = AppState.addEventListener('change', (s) => {
@@ -209,7 +215,6 @@ export function NearMe({
   // viewer ever remounts (e.g. around the memory feed), startIndex restores the
   // photo you were on, not the one you first tapped. null = closed.
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const pendingCluster = usePendingCluster();
 
   // Derive a boolean so this only fires when the viewer opens/closes, not on
@@ -223,33 +228,9 @@ export function NearMe({
   // re-rendered just because NearMe re-rendered for some unrelated reason.
   const openViewer = useCallback((i: number) => setViewerIndex(i), []);
 
-  // Floats at the lower-right of the grid as a white pill with a dark gear
-  // (the sheet outgrew notifications: it now also holds recreations and the
-  // onboarding replay), so it stays obvious over the photos and matches the
-  // gallery theme.
-  const notificationsButton = (
-    <Pressable
-      onPress={() => setSettingsOpen(true)}
-      style={[styles.notificationsBtn, { bottom: insets.bottom + 16, right: FrameMargin + 6 }]}
-      hitSlop={12}>
-      <SettingsIcon width={22} height={22} fill={Ink} />
-    </Pressable>
-  );
-
-  // Sits just above the bell as a matching pill: a manual refresh for the frozen
-  // grid (pull-to-refresh does the same and shares the `refreshing` spinner).
-  const refreshButton = (
-    <Pressable
-      onPress={onUserRefresh}
-      style={[styles.notificationsBtn, { bottom: insets.bottom + 16 + 56, right: FrameMargin + 6 }]}
-      hitSlop={12}>
-      <RefreshIcon width={22} height={22} fill={Ink} />
-    </Pressable>
-  );
-
-  const settingsSheet = (
-    <SettingsSheet visible={settingsOpen} onClose={() => setSettingsOpen(false)} />
-  );
+  // Settings moved to the Then & Now tab (like a profile/"you" tab), and the
+  // manual refresh pill is gone — pull-to-refresh (and the empty-state button)
+  // cover refreshing the frozen grid. So Near Me has no floating controls.
 
   if (!mediaPermission) {
     return <LoadingPolaroid />;
@@ -399,16 +380,6 @@ export function NearMe({
         />
       )}
 
-      {/* Hide the bell + refresh pill while memories or a full-screen photo are
-          open (they would otherwise float over them via zIndex). */}
-      {!pendingCluster && viewerIndex === null ? (
-        <>
-          {refreshButton}
-          {notificationsButton}
-        </>
-      ) : null}
-      {settingsSheet}
-
       {/* Memories cluster view: a tapped notification routes here. Rendered as
           an overlay on top of the normal Near Me so its right-swipe-to-close
           reveals the grid above instead of a black screen. */}
@@ -478,24 +449,5 @@ const styles = StyleSheet.create({
     color: '#777',
     fontSize: 14,
     textAlign: 'center',
-  },
-  notificationsBtn: {
-    position: 'absolute',
-    zIndex: 10,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Paper,
-    // Softer, more diffuse float with an Ink hairline — matches the memory
-    // banner card so every floating surface in the app reads the same way.
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(17,17,17,0.10)',
-    shadowColor: '#000',
-    shadowOpacity: 0.12,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 5,
   },
 });

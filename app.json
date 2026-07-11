@@ -19,6 +19,7 @@
       }
     },
     "android": {
+      "allowBackup": false,
       "adaptiveIcon": {
         "backgroundColor": "#EE5D6C",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -51,11 +52,26 @@
       "./plugins/with-no-push-entitlement.js",
       "expo-router",
       [
+        "expo-font",
+        {
+          "fonts": [
+            "./assets/fonts/ArchivoExpanded-Black.ttf"
+          ]
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "backgroundColor": "#FFFFFF",
           "image": "./assets/images/polaroid.png",
-          "imageWidth": 150
+          "imageWidth": 150,
+          "resizeMode": "contain",
+          "android": {
+            "backgroundColor": "#FFFFFF",
+            "image": "./assets/images/polaroid.png",
+            "imageWidth": 90,
+            "resizeMode": "contain"
+          }
         }
       ],
       [

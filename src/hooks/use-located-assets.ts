@@ -2,6 +2,7 @@ import { Asset, MediaType } from 'expo-media-library';
 
 import { loadAssetTimeLocation } from '@/hooks/use-asset-metadata';
 import { withTimeoutDefault } from '@/lib/async-safety';
+import { isDecodeBurstActive } from '@/lib/decode-burst';
 import { LOCATE_READ_MS } from '@/lib/loading-timeouts';
 import { persistedFile, readPersisted } from '@/lib/persisted-file';
 
@@ -30,6 +31,12 @@ const LARGE_SWEEP_DELAY_MS = 4;
 // enough to lose little work on a kill, large enough to keep writes infrequent
 // (~4 for a 10k library) so they don't hitch the feed during the background build.
 const CHECKPOINT_EVERY = 2000;
+// While the Near Me grid is mass-decoding a fresh snapshot (the decode burst),
+// the sweep drops to a trickle so metadata reads and image decodes don't peak
+// together against the Photos framework — see lib/decode-burst.ts. A burst
+// lasts ~10s; the few hundred reads deferred are noise against a full build.
+const BURST_SWEEP_CONCURRENCY = 2;
+const BURST_SWEEP_DELAY_MS = 150;
 
 export type LocatePacing = { concurrency: number; interBatchDelayMs: number };
 
@@ -40,6 +47,14 @@ export function locatePacing(total: number): LocatePacing {
     return { concurrency: LARGE_SWEEP_CONCURRENCY, interBatchDelayMs: LARGE_SWEEP_DELAY_MS };
   }
   return { concurrency: HYDRATE_CONCURRENCY, interBatchDelayMs: 0 };
+}
+
+// Pure: pacing with the decode-burst state applied.
+export function sweepPacing(total: number, decodeBurst: boolean): LocatePacing {
+  if (decodeBurst) {
+    return { concurrency: BURST_SWEEP_CONCURRENCY, interBatchDelayMs: BURST_SWEEP_DELAY_MS };
+  }
+  return locatePacing(total);
 }
 
 // --- First-build progress ----------------------------------------------------
@@ -110,20 +125,103 @@ let cached: AssetIndex | null = null;
 let syncedFor: Asset[] | null = null;
 let inflight: Promise<AssetIndex> | null = null;
 
+// Per-element validation (pattern: parseRecreation in lib/recreations.ts). The
+// index feeds the geofence notifications and Near Me, so a corrupt or
+// version-skewed element must be dropped here — downstream cluster math is
+// NaN-tolerant and would otherwise silently produce phantom/mislocated
+// clusters rather than crash.
+const MEDIA_TYPE_VALUES = new Set<string>(Object.values(MediaType));
+
+export function parseLocatedAsset(v: unknown): LocatedAsset | null {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const o = v as Record<string, unknown>;
+  if (typeof o.id !== 'string' || o.id.length === 0) return null;
+  if (typeof o.lat !== 'number' || !Number.isFinite(o.lat) || o.lat < -90 || o.lat > 90) {
+    return null;
+  }
+  if (typeof o.lng !== 'number' || !Number.isFinite(o.lng) || o.lng < -180 || o.lng > 180) {
+    return null;
+  }
+  const creationTime =
+    typeof o.creationTime === 'number' && Number.isFinite(o.creationTime)
+      ? o.creationTime
+      : o.creationTime === null
+        ? null
+        : undefined;
+  if (creationTime === undefined) return null;
+  if (typeof o.mediaType !== 'string' || !MEDIA_TYPE_VALUES.has(o.mediaType)) return null;
+  return {
+    id: o.id,
+    lat: o.lat,
+    lng: o.lng,
+    creationTime,
+    mediaType: o.mediaType as MediaType,
+  };
+}
+
+export function parseUnlocatedVideo(v: unknown): UnlocatedVideo | null {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const o = v as Record<string, unknown>;
+  if (typeof o.id !== 'string' || o.id.length === 0) return null;
+  if (typeof o.creationTime !== 'number' || !Number.isFinite(o.creationTime)) return null;
+  return { id: o.id, creationTime: o.creationTime };
+}
+
+// Best-effort id of a corrupt element, so it can be stripped from processedIds.
+function idOf(v: unknown): string | null {
+  if (v && typeof v === 'object' && !Array.isArray(v)) {
+    const id = (v as Record<string, unknown>).id;
+    if (typeof id === 'string' && id.length > 0) return id;
+  }
+  return null;
+}
+
+export function parseAssetIndex(text: string | null): AssetIndex | null {
+  if (text == null) return null;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const o = parsed as Record<string, unknown>;
+    if (
+      !Array.isArray(o.located) ||
+      !Array.isArray(o.unlocatedVideos) ||
+      !Array.isArray(o.processedIds)
+    ) {
+      return null;
+    }
+    // Ids of dropped elements are ALSO stripped from processedIds, so the next
+    // sync re-locates those assets instead of permanently losing them.
+    const droppedIds = new Set<string>();
+    const located: LocatedAsset[] = [];
+    for (const v of o.located) {
+      const entry = parseLocatedAsset(v);
+      if (entry) located.push(entry);
+      else {
+        const id = idOf(v);
+        if (id) droppedIds.add(id);
+      }
+    }
+    const unlocatedVideos: UnlocatedVideo[] = [];
+    for (const v of o.unlocatedVideos) {
+      const entry = parseUnlocatedVideo(v);
+      if (entry) unlocatedVideos.push(entry);
+      else {
+        const id = idOf(v);
+        if (id) droppedIds.add(id);
+      }
+    }
+    const processedIds = o.processedIds.filter(
+      (id): id is string => typeof id === 'string' && id.length > 0 && !droppedIds.has(id)
+    );
+    return { located, unlocatedVideos, processedIds };
+  } catch {
+    return null;
+  }
+}
+
 async function loadFromDisk(): Promise<AssetIndex | null> {
   try {
-    const text = await readPersisted(INDEX_FILE);
-    if (text == null) return null;
-    const parsed = JSON.parse(text);
-    if (
-      parsed &&
-      Array.isArray(parsed.located) &&
-      Array.isArray(parsed.unlocatedVideos) &&
-      Array.isArray(parsed.processedIds)
-    ) {
-      return parsed as AssetIndex;
-    }
-    return null;
+    return parseAssetIndex(await readPersisted(INDEX_FILE));
   } catch {
     return null;
   }
@@ -207,12 +305,19 @@ export function assembleIndex(
 
 export type LocateSweepDeps = {
   locate: (asset: Asset) => Promise<LocateResult>;
-  pacing: LocatePacing;
+  // A getter is re-read before every batch, so pacing can down-shift mid-sweep
+  // (e.g. while a Near Me decode burst is active) without restarting the sweep.
+  pacing: LocatePacing | (() => LocatePacing);
   checkpointEvery: number;
   // Fired after each batch with the accumulated results so far; the caller can
   // persist a partial index. Not fired on the final batch (the caller saves the
   // complete result itself).
   onCheckpoint?: (results: LocateResult[]) => void;
+  // When it returns false, a due checkpoint is deferred to a later batch — the
+  // full-index stringify + synchronous write is the sweep's biggest transient
+  // allocation and must stay out of the decode-burst window. `sinceCheckpoint`
+  // keeps accumulating, so the save fires on the first allowed batch.
+  canCheckpointNow?: () => boolean;
   // Fired after each batch with how many of `assets` are done.
   onProgress?: (processed: number, total: number) => void;
 };
@@ -224,19 +329,21 @@ export async function runLocateSweep(
   assets: Asset[],
   deps: LocateSweepDeps
 ): Promise<LocateResult[]> {
-  const { locate: locateFn, pacing, checkpointEvery, onCheckpoint, onProgress } = deps;
-  const { concurrency, interBatchDelayMs } = pacing;
+  const { locate: locateFn, pacing, checkpointEvery, onCheckpoint, canCheckpointNow, onProgress } =
+    deps;
   const total = assets.length;
   const out: LocateResult[] = [];
   let sinceCheckpoint = 0;
-  for (let i = 0; i < assets.length; i += concurrency) {
+  for (let i = 0; i < assets.length; ) {
+    const { concurrency, interBatchDelayMs } = typeof pacing === 'function' ? pacing() : pacing;
     const batch = assets.slice(i, i + concurrency);
+    i += batch.length;
     const results = await Promise.all(batch.map(locateFn));
     out.push(...results);
     onProgress?.(out.length, total);
     sinceCheckpoint += batch.length;
     // Don't checkpoint the final batch — the caller persists the complete result.
-    if (sinceCheckpoint >= checkpointEvery && out.length < total) {
+    if (sinceCheckpoint >= checkpointEvery && out.length < total && (canCheckpointNow?.() ?? true)) {
       sinceCheckpoint = 0;
       onCheckpoint?.(out);
     }
@@ -285,10 +392,11 @@ async function sync(base: AssetIndex | null, assets: Asset[]): Promise<AssetInde
 
   const results = await runLocateSweep(toAdd, {
     locate,
-    pacing: locatePacing(toAdd.length),
+    pacing: () => sweepPacing(toAdd.length, isDecodeBurstActive()),
     checkpointEvery: CHECKPOINT_EVERY,
     onCheckpoint: (partial) =>
       saveToDisk(assembleIndex(kept, toAdd.slice(0, partial.length), partial)),
+    canCheckpointNow: () => !isDecodeBurstActive(),
     onProgress: report ? (done) => setBuildProgress(baseDone + done, libraryTotal) : undefined,
   });
 

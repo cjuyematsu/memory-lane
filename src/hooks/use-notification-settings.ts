@@ -26,18 +26,38 @@ function notify() {
   for (const cb of subscribers) cb(cached);
 }
 
+// Pure: parse persisted settings without trusting field types. A wrong-typed
+// placeCooldownMs (an older build, a tampered file) would flow into the
+// cluster-cooldown's `now - at < windowMs` as NaN -> false -> that place
+// re-notifies forever. Note `placeCooldownMs: null` is a LEGITIMATE persisted
+// value ("Only once"), so present-null must survive while garbage falls back
+// to the default.
+export function parseNotificationSettings(text: string | null): NotificationSettings {
+  const out = { ...DEFAULTS };
+  if (text == null) return out;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return out;
+    const o = parsed as Record<string, unknown>;
+    if (typeof o.enabled === 'boolean') out.enabled = o.enabled;
+    if ('placeCooldownMs' in o) {
+      const v = o.placeCooldownMs;
+      if (v === null || (typeof v === 'number' && Number.isFinite(v) && v > 0)) {
+        out.placeCooldownMs = v;
+      }
+    }
+    return out;
+  } catch {
+    return out;
+  }
+}
+
 function loadFromDisk(): Promise<NotificationSettings> {
   if (cached) return Promise.resolve(cached);
   if (inflight) return inflight;
   inflight = (async () => {
     try {
-      const text = await readPersisted(FILE_NAME);
-      if (text == null) {
-        cached = { ...DEFAULTS };
-        return cached;
-      }
-      const parsed = JSON.parse(text) as Partial<NotificationSettings>;
-      cached = { ...DEFAULTS, ...parsed };
+      cached = parseNotificationSettings(await readPersisted(FILE_NAME));
       return cached;
     } catch {
       cached = { ...DEFAULTS };
