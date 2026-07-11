@@ -45,7 +45,7 @@ describe('SetupNote', () => {
     expect(text).toContain('Setting up Near Me');
     expect(text).toContain('This happens once');
     // Always points the user at the tab that already works.
-    expect(text).toContain('Camera Roll is ready');
+    expect(text).toContain('Memories tab is ready');
     expect(text).not.toContain(' of ');
 
     // The index build pushes progress; the subscribed note re-renders with the

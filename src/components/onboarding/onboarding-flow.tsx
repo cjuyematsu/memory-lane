@@ -18,7 +18,7 @@ import BellIcon from '@/assets/icons/bell.svg';
 import { SpectrumRule } from '@/components/brand/spectrum-rule';
 import { MockFeedCard, MockGrid } from '@/components/onboarding/mocks';
 import { CooldownPicker } from '@/components/notifications/cooldown-picker';
-import { Colors, DisplayFont, Ink, Paper, PhotoRatio } from '@/constants/theme';
+import { Colors, DisplayFont, HeaderHeight, Ink, Paper, PhotoRatio } from '@/constants/theme';
 import { Asset } from 'expo-media-library';
 
 import { ensureAssetsLoaded } from '@/hooks/use-asset-feed';
@@ -424,7 +424,7 @@ export function OnboardingFlow() {
       case 'photos':
         return {
           preview: <MockFeedCard width={feedW} />,
-          title: 'Camera Roll',
+          title: 'Memories',
           body: 'A shuffle of your old photos, each one framed with when and where you took it.',
           reassure: true,
           primaryLabel: 'Allow Photos',
@@ -498,7 +498,7 @@ export function OnboardingFlow() {
             />
           ),
           title: "You're all set",
-          body: 'Swipe between Camera Roll and Near Me. Tune anything later from Settings.',
+          body: 'Swipe between Memories and Near Me. Tune anything later from Settings.',
           primaryLabel: 'Start exploring',
           onPrimary: finish,
         };
@@ -582,7 +582,9 @@ const styles = StyleSheet.create({
     zIndex: 150,
   },
   header: {
-    height: 44,
+    // Same constant as the app's tab bar, so the spectrum band below doesn't
+    // jump when onboarding hands off to the app.
+    height: HeaderHeight,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -605,11 +607,12 @@ const styles = StyleSheet.create({
     transform: [{ rotate: '45deg' }],
     marginLeft: 3,
   },
+  // Same type treatment as the tab-bar labels (top-tabs.tsx `label`), so the
+  // header reads as the same chrome the app shows after the handoff.
   wordmark: {
     fontFamily: DisplayFont,
     color: Ink,
-    fontSize: 16,
-    letterSpacing: 1,
+    fontSize: 13,
     textTransform: 'uppercase',
   },
   body: {

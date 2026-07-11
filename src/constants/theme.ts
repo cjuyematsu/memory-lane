@@ -84,4 +84,7 @@ export const BrandSpectrum = ['#6A0D83', '#CE4993', '#EE5D6C', '#FB9062', '#EEAF
 // Every framed photo is cropped/letterboxed to this ratio (768 × 1024).
 export const PhotoRatio = 768 / 1024; // width / height = 0.75
 export const FrameMargin = 10; // side gutter around the single-photo frame / grid panel
-export const HeaderHeight = 32; // CAMERA ROLL / NEAR ME bar height
+// MEMORIES / NEAR ME / RETAKES bar height. Also the onboarding header height:
+// both surfaces size their chrome from this so the spectrum band sits at the
+// exact same Y before and after onboarding (no jump on the handoff).
+export const HeaderHeight = 44;

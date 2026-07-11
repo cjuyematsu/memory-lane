@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { ActivityIndicator, Image, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Image, Platform, StyleSheet, View } from 'react-native';
 
 import { Paper } from '@/constants/theme';
 
@@ -12,7 +12,10 @@ const ASPECT = 508 / 602; // the cropped asset's width / height
 // equals imageWidth and its width is imageWidth * ASPECT. Sizing the in-app one
 // identically — same height, same width, same screen-center — means the static
 // splash polaroid and this one are pixel-for-pixel the same: no size jump.
-const SPLASH_IMAGE_WIDTH = 150; // keep in sync with app.json
+// Android 12+ masks the native splash icon into a circle, so its `imageWidth`
+// is smaller (see app.json `android` override) to keep the tall polaroid inside
+// the circle uncropped — match that here so the hand-off stays seamless.
+const SPLASH_IMAGE_WIDTH = Platform.OS === 'android' ? 90 : 150; // keep in sync with app.json
 const HEIGHT = SPLASH_IMAGE_WIDTH;
 const WIDTH = HEIGHT * ASPECT;
 // The black photo window's center sits above the polaroid's geometric middle

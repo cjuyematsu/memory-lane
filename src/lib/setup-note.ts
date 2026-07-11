@@ -9,7 +9,7 @@ export const SETUP_NOTE_TITLE = 'Setting up Near Me';
 
 // Points the user at the tab that already works, so the wait never reads as the
 // whole app being stuck.
-export const SETUP_NOTE_HINT = 'Your Camera Roll is ready to browse while this finishes.';
+export const SETUP_NOTE_HINT = 'Your Memories tab is ready to browse while this finishes.';
 
 // Thousands separators without Intl: "9800" -> "9,800".
 export function withCommas(n: number): string {
