@@ -13,7 +13,9 @@ import { DisplayFont, FrameMargin, Ink, Paper, PhotoRatio } from '@/constants/th
 import { recreationUri, useRecreations, type Recreation } from '@/lib/recreations';
 
 const COLUMNS = 2;
-const GAP = 4;
+// Same hairline gutter as the Near Me grid (grid.tsx) — the two grids should
+// read as the same surface, this one just runs two-up.
+const GAP = 2;
 
 // The Recreations pane: the third tab alongside Camera Roll and Near Me. A
 // 2-column grid of kept recreations (the "now" retake with a small "then"
@@ -37,34 +39,20 @@ export function RecreationsGallery({
   // at the lower-right — the only place it's reachable now.
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Resolve from the live list so a delete inside the viewer can't strand a
-  // stale record here.
-  const viewing =
-    viewingId != null ? (items?.find((r) => r.id === viewingId) ?? null) : null;
+  // stale record here (the viewer freezes its own copy; this index only gates
+  // mounting). The viewer owns paging internally, like Near Me's.
+  const viewingIndex =
+    viewingId != null && items != null ? items.findIndex((r) => r.id === viewingId) : -1;
 
   // Report viewer open/close up so TopTabs can gate the pager (same pattern as
   // Near Me). Derive the boolean so it only fires on open/close, not on every
   // list change while the viewer is up.
-  const viewerOpen = viewing != null;
+  const viewerOpen = viewingIndex >= 0;
   useEffect(() => {
     onViewerOpenChange?.(viewerOpen);
   }, [viewerOpen, onViewerOpenChange]);
 
   const openItem = useCallback((id: string) => setViewingId(id), []);
-
-  // Horizontal swipe inside the viewer steps to the neighboring recreation in
-  // grid order; at either end it just stays put. Owned here because the viewer
-  // only knows its single record.
-  const stepViewer = useCallback(
-    (dir: 1 | -1) => {
-      setViewingId((current) => {
-        if (current == null || items == null) return current;
-        const at = items.findIndex((r) => r.id === current);
-        if (at < 0) return current;
-        return items[at + dir]?.id ?? current;
-      });
-    },
-    [items]
-  );
 
   const renderItem = useCallback<ListRenderItem<Recreation>>(
     ({ item }) => <GalleryTile rec={item} onPress={openItem} />,
@@ -86,8 +74,8 @@ export function RecreationsGallery({
           keyExtractor={keyExtractor}
           renderItem={renderItem}
           contentContainerStyle={{
+            // Edge-to-edge like the Near Me grid (no horizontal inset).
             paddingTop: frameTop(insets.top),
-            paddingHorizontal: 12,
             paddingBottom: insets.bottom + 24,
           }}
           showsVerticalScrollIndicator={false}
@@ -97,7 +85,7 @@ export function RecreationsGallery({
 
       {/* Settings gear — hidden while a recreation is open full-screen (it would
           otherwise float over the viewer via zIndex). */}
-      {viewing == null ? (
+      {!viewerOpen ? (
         <Pressable
           onPress={() => setSettingsOpen(true)}
           style={[styles.settingsBtn, { bottom: insets.bottom + 16, right: FrameMargin + 6 }]}
@@ -106,11 +94,11 @@ export function RecreationsGallery({
         </Pressable>
       ) : null}
 
-      {viewing ? (
+      {viewerOpen && items ? (
         <RecreationViewer
-          recreation={viewing}
+          items={items}
+          startIndex={viewingIndex}
           onClose={() => setViewingId(null)}
-          onStep={stepViewer}
         />
       ) : null}
 
