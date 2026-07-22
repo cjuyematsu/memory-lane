@@ -607,12 +607,11 @@ const styles = StyleSheet.create({
     transform: [{ rotate: '45deg' }],
     marginLeft: 3,
   },
-  // Same type treatment as the tab-bar labels (top-tabs.tsx `label`), so the
-  // header reads as the same chrome the app shows after the handoff.
   wordmark: {
     fontFamily: DisplayFont,
     color: Ink,
-    fontSize: 13,
+    fontSize: 16,
+    letterSpacing: 1,
     textTransform: 'uppercase',
   },
   body: {
