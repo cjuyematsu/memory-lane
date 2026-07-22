@@ -259,28 +259,38 @@ export async function hydrateAsset(asset: Asset): Promise<AssetMetadata> {
           ),
         ]);
         // Fall back to modification time if the asset has no (valid) creation
-        // time, so the date is always present.
-        const creationTime =
-          firstValidTime(ctRes.v) ??
-          (await withTimeoutDefault(
-            asset.getModificationTime().catch(() => null),
-            LOCATE_READ_MS,
-            null
-          ));
+        // time, so the date is always present. Track the fallback's ok-ness
+        // like the primary reads: a thrown/timed-out fallback must NOT count
+        // as a real answer, or a transient failure would cache a permanently
+        // blank date below.
+        const validCt = firstValidTime(ctRes.v);
+        const mtRes: { ok: boolean; v: number | null } =
+          validCt != null
+            ? { ok: true, v: null } // fallback not needed
+            : await withTimeoutDefault(
+                asset.getModificationTime().then(
+                  (v): { ok: boolean; v: number | null } => ({ ok: true, v }),
+                  (): { ok: boolean; v: number | null } => ({ ok: false, v: null })
+                ),
+                LOCATE_READ_MS,
+                { ok: false, v: null }
+              );
+        const creationTime = validCt ?? mtRes.v;
         const meta: AssetMetadata = {
           uri: asset.id,
           creationTime,
           location: locRes.v,
           mediaType,
         };
-        // Cache only when both native reads actually succeeded. If either threw
-        // (cold-launch race), still return this best-effort meta so the card
-        // shows whatever we have, but leave it UNCACHED so useAssetMetadata
-        // re-attempts and the caption recovers once the framework is warm —
-        // instead of a failed read poisoning the cache for the whole session.
-        // A successful read of an absent value (a photo with no GPS) counts as
-        // ok and is cached, so those aren't re-read.
-        if (ctRes.ok && locRes.ok) cappedSet(fullCache, asset.id, meta);
+        // Cache only when every read that produced this meta actually
+        // succeeded. If any threw (cold-launch race), still return this
+        // best-effort meta so the card shows whatever we have, but leave it
+        // UNCACHED so useAssetMetadata re-attempts and the caption recovers
+        // once the framework is warm — instead of a failed read poisoning the
+        // cache for the whole session. A successful read of an absent value
+        // (a photo with no GPS) counts as ok and is cached, so those aren't
+        // re-read.
+        if (ctRes.ok && locRes.ok && mtRes.ok) cappedSet(fullCache, asset.id, meta);
         return meta;
       }
 
@@ -348,14 +358,19 @@ export function useAssetMetadata(asset: Asset | null): AssetMetadata | null {
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let attempt = 0;
-    // A few patient retries with backoff (~4s total at 400*attempt) so a read
-    // that throws because the Photos framework isn't warm yet on cold launch
-    // gets re-attempted once it is — rather than leaving the card captionless.
-    const maxAttempts = 5;
+    // Patient retries with capped backoff (~18s total) so a read that throws
+    // because the Photos framework isn't warm yet on cold launch — or because
+    // a shuffle refill's warmAssetMetadata fan-out has a dozen reads in flight
+    // and this card's timed out — gets re-attempted once things settle. The
+    // old ~4s window ended inside exactly those contention bursts, leaving a
+    // perfectly readable photo captionless until its card remounted. Retries
+    // that land after another path hydrated the cache resolve instantly.
+    const maxAttempts = 8;
 
     const scheduleRetry = () => {
       attempt += 1;
-      if (attempt < maxAttempts) retryTimer = setTimeout(tryHydrate, 400 * attempt);
+      if (attempt < maxAttempts)
+        retryTimer = setTimeout(tryHydrate, Math.min(500 * attempt, 4000));
     };
     const tryHydrate = () => {
       hydrateAsset(asset)

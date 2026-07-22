@@ -1,6 +1,11 @@
+import * as Location from 'expo-location';
 import type { LocationGeocodedAddress } from 'expo-location';
 
-import { pickPlaceName } from '@/hooks/use-reverse-geocode';
+import { pickPlaceName, prefetchReverseGeocode } from '@/hooks/use-reverse-geocode';
+
+jest.mock('expo-location', () => ({
+  reverseGeocodeAsync: jest.fn(),
+}));
 
 // Build a full address with everything null but the given overrides, so each
 // case isolates exactly the fields under test.
@@ -68,5 +73,60 @@ describe('pickPlaceName', () => {
   it('returns null when nothing usable is present', () => {
     expect(pickPlaceName(addr({}))).toBeNull();
     expect(pickPlaceName(addr({ name: '12345' }))).toBeNull();
+  });
+});
+
+// The failure-handling contract of the module lookup (via prefetch, the
+// non-React entry): a FAILED geocode must never poison the coordinate-bucket
+// cache for the session, but re-attempts are throttled so retries can't
+// hammer Apple's rate limiter. Coordinates are distinct per test — the
+// module cache is shared state.
+describe('reverse-geocode failure handling', () => {
+  const geocode = jest.mocked(Location.reverseGeocodeAsync);
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  beforeEach(() => {
+    geocode.mockReset();
+  });
+
+  it('does not cache a failure, throttles retries, then recovers', async () => {
+    const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    const coords = { latitude: 10.001, longitude: 20.001 };
+
+    geocode.mockRejectedValueOnce(new Error('rate limited'));
+    prefetchReverseGeocode(coords);
+    await flush();
+    expect(geocode).toHaveBeenCalledTimes(1);
+
+    // Inside the throttle window: short-circuits without a native call.
+    prefetchReverseGeocode(coords);
+    await flush();
+    expect(geocode).toHaveBeenCalledTimes(1);
+
+    // Past the window: the same bucket is retried (NOT poisoned by the
+    // failure), and this success is cached.
+    nowSpy.mockReturnValue(1_000_000 + 9_000);
+    geocode.mockResolvedValueOnce([addr({ name: 'Pike Place Market' })]);
+    prefetchReverseGeocode(coords);
+    await flush();
+    expect(geocode).toHaveBeenCalledTimes(2);
+
+    // Cached now — no further native calls, even past another window.
+    nowSpy.mockReturnValue(1_000_000 + 60_000);
+    prefetchReverseGeocode(coords);
+    await flush();
+    expect(geocode).toHaveBeenCalledTimes(2);
+
+    nowSpy.mockRestore();
+  });
+
+  it('caches a successful empty result as a real "no placemark" answer', async () => {
+    const coords = { latitude: 30.002, longitude: 40.002 };
+    geocode.mockResolvedValueOnce([]);
+    prefetchReverseGeocode(coords);
+    await flush();
+    prefetchReverseGeocode(coords);
+    await flush();
+    expect(geocode).toHaveBeenCalledTimes(1);
   });
 });
