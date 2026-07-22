@@ -9,10 +9,16 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 
+import { type SharedRefType } from 'expo';
 import { CameraView, useCameraPermissions, type CameraType } from 'expo-camera';
 import { Image } from 'expo-image';
-import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
+import { ImageManipulator, SaveFormat, type ImageRef } from 'expo-image-manipulator';
 
 import FlipIcon from '@/assets/icons/flip.svg';
 import GhostIcon from '@/assets/icons/ghost.svg';
@@ -76,6 +82,17 @@ export function RecreationCamera({
   const [ghostIdx, setGhostIdx] = useState(0);
   const ghostOpacity = GHOST_LEVELS[ghostIdx];
 
+  // Shutter feedback = flash + FREEZE, the normal-camera pattern. The white
+  // flash spikes to 1 on the tap and fades; behind it, pausePreview() freezes
+  // the preview layer on the tap-moment frame (it only disables the preview
+  // connection — the session and the in-flight photo capture are untouched).
+  // The frozen frame IS the shot, holding perfectly still until the review
+  // crossfades in over it, so there's never live-preview dead time or a
+  // blacked-out screen between tap and review. (An earlier version held an
+  // opaque black cover here — it read as the app dying, not a shutter.)
+  const flashOpacity = useSharedValue(0);
+  const flashStyle = useAnimatedStyle(() => ({ opacity: flashOpacity.value }));
+
   // Ghost fit follows the app-wide rule (cover portrait / contain landscape),
   // seeded from the shared ratio cache and corrected by onLoad — same as the
   // feed's OverlayFramedPhoto.
@@ -111,40 +128,79 @@ export function RecreationCamera({
     if (!cameraReady || capturing.current) return;
     capturing.current = true;
     setCaptureBusy(true);
+    // Instant shutter feedback on the tap itself: white flash over the frame
+    // frozen by pausePreview below (see the comment above).
+    flashOpacity.value = 1;
+    flashOpacity.value = withTiming(0, { duration: 240 });
     try {
-      // Default processing (no skipProcessing) so EXIF orientation is baked in.
-      const pic = await cameraRef.current?.takePictureAsync({ quality: 0.9 });
-      if (pic?.uri) {
-        let out = { uri: pic.uri, width: pic.width, height: pic.height };
+      // pictureRef: the native image handle comes back without the full-res
+      // JPEG encode + disk write (that alone was a couple-second stall on the
+      // review transition). Orientation is carried by the native image
+      // instance, so nothing downstream needs EXIF handling. The file encode
+      // runs in the background via `fileUri` below; Save/Share await it.
+      // Initiate the capture FIRST, then freeze the preview — pause only
+      // disables the preview layer, so the capture completes from the live
+      // session either way, but this order keeps the captured moment and the
+      // frozen frame the same instant.
+      const capture = cameraRef.current?.takePictureAsync({ pictureRef: true });
+      cameraRef.current?.pausePreview();
+      const pic = await capture;
+      if (pic) {
+        let ref: SharedRefType<'image'> = pic;
+        let width = pic.width;
+        let height = pic.height;
+        let flipped: ImageRef | null = null;
         if (facing === 'front') {
           // Un-mirror selfies (Snapchat/BeReal behavior). expo-camera's iOS
           // pipeline leaves the front capture mirrored to match the preview
           // (AVFoundation's automatic mirroring wins over the mirror prop),
-          // so flip it back explicitly; a failed flip falls back to the
-          // mirrored original rather than losing the shot.
+          // so flip it back explicitly — in memory, on the ref, no encode. A
+          // failed flip falls back to the mirrored original rather than
+          // losing the shot.
           try {
-            const flipped = await ImageManipulator.manipulate(pic.uri)
+            flipped = await ImageManipulator.manipulate(pic)
               .flip('horizontal')
               .renderAsync();
-            const saved = await flipped.saveAsync({
-              format: SaveFormat.JPEG,
-              compress: 0.9,
-            });
-            out = { uri: saved.uri, width: saved.width, height: saved.height };
+            ref = flipped;
+            width = flipped.width;
+            height = flipped.height;
           } catch {
             // keep the unflipped capture
           }
         }
+        // Kick off the tmp-jpg encode now, in the background, so it's long
+        // done by the time the user taps Save/Share on the review screen.
+        // Memoized single promise; a failure surfaces at the await sites
+        // (which alert), the no-op catch just silences the unhandled-
+        // rejection warning when the user discards without ever needing it.
+        // savePictureAsync quirks: no options — Android floors a fractional
+        // quality to 0 (`quality.toInt() * 100`), so the default (max) is the
+        // only safe value; and unpatched iOS returns the path under `url`,
+        // not the typed `uri` (our expo-camera patch adds `uri`, the fallback
+        // covers builds without it).
+        const encode = flipped
+          ? flipped.saveAsync({ format: SaveFormat.JPEG, compress: 0.9 }).then((r) => r.uri)
+          : pic.savePictureAsync().then((r) => {
+              const uri = r.uri ?? (r as unknown as { url?: string }).url;
+              if (!uri) throw new Error('savePictureAsync returned no uri');
+              return uri;
+            });
+        encode.catch(() => {});
         onCaptured({
-          ...out,
+          ref,
+          width,
+          height,
           // Distance at shutter time, carried through to captions/composites.
           distanceM: meters,
+          fileUri: () => encode,
         });
         return; // review phase replaces this screen; no need to re-arm
       }
     } catch {
       // fall through and re-arm the shutter
     }
+    // Failed/empty capture: unfreeze so the re-armed shutter is live again.
+    cameraRef.current?.resumePreview();
     capturing.current = false;
     setCaptureBusy(false);
   };
@@ -197,6 +253,10 @@ export function RecreationCamera({
                 <Text style={styles.hintLabel}>{hint}</Text>
               </View>
             ) : null}
+            <Animated.View
+              style={[styles.flash, flashStyle]}
+              pointerEvents="none"
+            />
           </View>
 
           {/* Controls band between the preview bottom and the screen bottom. */}
@@ -311,6 +371,15 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
+  },
+  // Shutter flash: covers the preview only (the chrome shouldn't blink).
+  flash: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: Paper,
   },
   // Floating over the preview, top center — where camera apps put status.
   hintChip: {

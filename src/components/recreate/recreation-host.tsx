@@ -3,6 +3,8 @@ import { BackHandler, StyleSheet, useWindowDimensions, View } from 'react-native
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   Easing,
+  FadeIn,
+  FadeOut,
   interpolate,
   useAnimatedStyle,
   useSharedValue,
@@ -10,6 +12,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
 
+import { type SharedRefType } from 'expo';
 import { StatusBar } from 'expo-status-bar';
 
 import { RecreationCamera } from '@/components/recreate/recreation-camera';
@@ -29,15 +32,21 @@ const DISMISS_VELOCITY = 900;
 const ENTER_TIMING = { duration: 320, easing: Easing.out(Easing.cubic) };
 const EXIT_TIMING = { duration: 230, easing: Easing.in(Easing.cubic) };
 
-// The retaken photo as handed back by the camera (a tmp file in the camera's
-// cache dir). It only becomes durable if the user explicitly Saves on the
-// review screen. distanceM = how far from the original photo's spot the
-// shutter was pressed (null when either fix was unavailable).
+// The retaken photo as handed back by the camera. `ref` is the native image
+// instance (expo SharedRef) delivered by takePictureAsync({ pictureRef: true })
+// — it renders directly in expo-image, which is what lets the review appear
+// the moment the shutter fires instead of after a full-res JPEG encode.
+// `fileUri()` resolves the tmp jpg (encode kicked off in the background at
+// capture time, memoized), which Save/Share await; it only becomes durable if
+// the user explicitly Saves on the review screen. distanceM = how far from
+// the original photo's spot the shutter was pressed (null when either fix was
+// unavailable).
 export type CapturedPhoto = {
-  uri: string;
+  ref: SharedRefType<'image'>;
   width: number;
   height: number;
   distanceM: number | null;
+  fileUri: () => Promise<string>;
 };
 
 // Root-mounted full-screen overlay (see app/_layout.tsx) driving the photo
@@ -142,25 +151,42 @@ export function RecreationHost() {
       <Animated.View style={[styles.backdrop, backdropStyle]} pointerEvents="none" />
       <GestureDetector gesture={dismissPan}>
         <Animated.View style={[styles.sheet, slideStyle]}>
+          {/* Camera ⇄ review crossfade: a hard conditional swap made the
+              review pop onto the screen the frame the capture resolved, which
+              read as a jerk right after the shutter flash. The outgoing phase
+              fades out while the incoming fades in (both sit on the same
+              Letterbox black, so the blend is seamless); the exiting camera
+              lingering ~150ms with a live CameraView is harmless — capture is
+              already done and the host still unmounts everything on close. */}
           {phase === 'review' && captured ? (
-            <RecreationReview
-              target={target}
-              photo={captured}
-              onRetake={() => {
-                setCaptured(null);
-                setPhase('camera');
-              }}
-              onDone={animateClose}
-            />
+            <Animated.View
+              style={styles.phase}
+              entering={FadeIn.duration(200)}
+              exiting={FadeOut.duration(150)}>
+              <RecreationReview
+                target={target}
+                photo={captured}
+                onRetake={() => {
+                  setCaptured(null);
+                  setPhase('camera');
+                }}
+                onDone={animateClose}
+              />
+            </Animated.View>
           ) : (
-            <RecreationCamera
-              target={target}
-              onClose={animateClose}
-              onCaptured={(photo) => {
-                setCaptured(photo);
-                setPhase('review');
-              }}
-            />
+            <Animated.View
+              style={styles.phase}
+              entering={FadeIn.duration(200)}
+              exiting={FadeOut.duration(150)}>
+              <RecreationCamera
+                target={target}
+                onClose={animateClose}
+                onCaptured={(photo) => {
+                  setCaptured(photo);
+                  setPhase('review');
+                }}
+              />
+            </Animated.View>
           )}
         </Animated.View>
       </GestureDetector>
@@ -190,5 +216,8 @@ const styles = StyleSheet.create({
   sheet: {
     flex: 1,
     backgroundColor: Letterbox,
+  },
+  phase: {
+    flex: 1,
   },
 });

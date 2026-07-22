@@ -1,10 +1,18 @@
 import { useEffect, useState } from 'react';
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import {
+  Alert,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+} from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Asset as MediaAsset } from 'expo-media-library';
 
 import XIcon from '@/assets/icons/x.svg';
+import { FEED_BOTTOM_RESERVE, frameLayout } from '@/components/feed/photo-frame';
 import { type CapturedPhoto } from '@/components/recreate/recreation-host';
 import { ThenNowPreview } from '@/components/recreate/then-now-preview';
 import { useCompositeCapture } from '@/components/recreate/use-composite-capture';
@@ -69,23 +77,42 @@ export function RecreationReview({
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
   const { captureComposite, captureElement } = useCompositeCapture();
 
-  const thenNowData: ThenNowShare = {
+  // The camera preview box this capture was just framed in — the same
+  // frameLayout call RecreationCamera makes. ThenNowPreview settles the shot
+  // from this rect into its review position, so the frozen capture visibly
+  // shrinks into the card instead of cutting between two sizes.
+  const { width: screenW, height: screenH } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const cameraRect = frameLayout(
+    screenW,
+    screenH,
+    insets.top,
+    insets.bottom,
+    FEED_BOTTOM_RESERVE
+  );
+
+  // The share/persist payload is plain persisted data (uri strings, never
+  // refs), so it's built at action time: `photo.fileUri()` is the background
+  // jpg encode started at capture — normally long resolved by the time the
+  // user taps Share/Save, so the await is free; if the encode failed, the
+  // action's catch alerts instead of shipping a broken payload.
+  const buildThenNowData = async (): Promise<ThenNowShare> => ({
     oldAssetId: target.asset.id,
-    newPhotoUri: photo.uri,
+    newPhotoUri: await photo.fileUri(),
     oldCreationTime: creationTime,
     oldLocation: location,
     primary,
     capturedDistanceM: photo.distanceM,
-  };
+  });
 
   const handleShare = async () => {
-    if (mode === 'both') {
-      requestThenNowShare(thenNowData);
-      return;
-    }
-    // Just the retake, as a plain photo — no composite, no host UI needed.
     try {
-      await shareFile(photo.uri, 'image/jpeg');
+      if (mode === 'both') {
+        requestThenNowShare(await buildThenNowData());
+        return;
+      }
+      // Just the retake, as a plain photo — no composite, no host UI needed.
+      await shareFile(await photo.fileUri(), 'image/jpeg');
     } catch {
       Alert.alert("Couldn't share", 'This photo could not be shared.');
     }
@@ -99,11 +126,12 @@ export function RecreationReview({
         // The clean composite (photo + inset + chip, no canvas) goes to the
         // camera roll — the default shareable artifact — and the pair is kept
         // in the app's gallery for later re-shares and swaps.
+        const thenNowData = await buildThenNowData();
         const compositeUri = await captureComposite(thenNowData);
         await MediaAsset.create(compositeUri);
         await addRecreation({
           oldAssetId: target.asset.id,
-          tmpPhotoUri: photo.uri,
+          tmpPhotoUri: thenNowData.newPhotoUri,
           capturedAt: Date.now(),
           oldCreationTime: creationTime,
           oldLocation: location,
@@ -112,7 +140,7 @@ export function RecreationReview({
         });
       } else {
         // Straight to the camera roll; nothing kept in the app.
-        await MediaAsset.create(photo.uri);
+        await MediaAsset.create(await photo.fileUri());
       }
       setSaveState('saved');
     } catch {
@@ -133,7 +161,8 @@ export function RecreationReview({
         <View style={styles.previewWrap}>
           <ThenNowPreview
             thenUri={target.asset.id}
-            nowUri={photo.uri}
+            nowSource={photo.ref}
+            settleFrom={cameraRect}
             thenCreationTime={creationTime}
             distanceM={photo.distanceM}
             primary={primary}

@@ -1,0 +1,76 @@
+diff --git a/node_modules/expo-camera/ios/Common/ExpoCameraUtils.swift b/node_modules/expo-camera/ios/Common/ExpoCameraUtils.swift
+index 9687b15..821ed92 100644
+--- a/node_modules/expo-camera/ios/Common/ExpoCameraUtils.swift
++++ b/node_modules/expo-camera/ios/Common/ExpoCameraUtils.swift
+@@ -261,6 +261,10 @@ struct ExpoCameraUtils {
+     }
+ 
+     result["url"] = fileUrl.absoluteString
++    // The JS PhotoResult type promises `uri` (and Android returns `uri`), but
++    // this dictionary only carried `url` — savePictureAsync resolved with an
++    // undefined uri on iOS. Provide both.
++    result["uri"] = fileUrl.absoluteString
+     result["width"] = normalizedImage.size.width
+     result["height"] = normalizedImage.size.height
+     result["base64"] = options.base64 ? data.base64EncodedString() : nil
+diff --git a/node_modules/expo-camera/ios/Current/CameraPhotoCapture.swift b/node_modules/expo-camera/ios/Current/CameraPhotoCapture.swift
+index d7e8485..fb2e570 100644
+--- a/node_modules/expo-camera/ios/Current/CameraPhotoCapture.swift
++++ b/node_modules/expo-camera/ios/Current/CameraPhotoCapture.swift
+@@ -83,7 +83,23 @@ class CameraPhotoCapture: NSObject, AVCapturePhotoCaptureDelegate {
+       }
+ 
+       if #available(iOS 16.0, *) {
+-        photoSettings.maxPhotoDimensions = photoOutput.maxPhotoDimensions
++        var dimensions = photoOutput.maxPhotoDimensions
++        // pictureRef captures prioritize shutter latency: use the smallest
++        // photo dimensions the active format supports (12MP-class instead of
++        // 24/48MP on newer sensors). Capture, decode, and the later save
++        // encode all scale with pixel count, and 12MP is far beyond any
++        // output this app produces.
++        if options.pictureRef,
++          let inputs = captureDelegate?.previewLayer.session?.inputs,
++          let deviceInput = inputs.compactMap({ $0 as? AVCaptureDeviceInput }).first {
++          let supported = deviceInput.device.activeFormat.supportedMaxPhotoDimensions
++          if let smallest = supported.min(by: {
++            Int64($0.width) * Int64($0.height) < Int64($1.width) * Int64($1.height)
++          }) {
++            dimensions = smallest
++          }
++        }
++        photoSettings.maxPhotoDimensions = dimensions
+       }
+ 
+       if !photoSettings.availablePreviewPhotoPixelFormatTypes.isEmpty,
+@@ -95,7 +111,10 @@ class CameraPhotoCapture: NSObject, AVCapturePhotoCaptureDelegate {
+         photoSettings.isHighResolutionPhotoEnabled = true
+       }
+ 
+-      photoSettings.photoQualityPrioritization = .balanced
++      // pictureRef captures trade multi-frame fusion post-processing for
++      // shutter speed (.speed is always <= the output's default .balanced
++      // ceiling, so this can't throw).
++      photoSettings.photoQualityPrioritization = options.pictureRef ? .speed : .balanced
+ 
+       photoOutput.capturePhoto(with: photoSettings, delegate: self)
+     }
+@@ -163,6 +182,19 @@ class CameraPhotoCapture: NSObject, AVCapturePhotoCaptureDelegate {
+     let croppedSize = AVMakeRect(aspectRatio: previewSize, insideRect: cropRect)
+ 
+     takenImage = ExpoCameraUtils.crop(image: takenImage, to: croppedSize)
++
++    // PictureRef consumers want the in-memory image itself, as fast as
++    // possible. Returning here skips (a) the full-resolution JPEG encode +
++    // re-decode below — savePictureAsync re-encodes with its own quality
++    // anyway and the ref renders directly — and (b) normalizeOrientation's
++    // full-size redraw: the UIImage carries its orientation flag, which every
++    // consumer honors (UIKit/expo-image rendering, ImageManipulator's
++    // fix-orientation-on-load, and saveImage normalizes before encoding), so
++    // baking it here was pure latency on the shutter path.
++    if options.pictureRef {
++      return PictureRef(takenImage)
++    }
++
+     takenImage = ExpoCameraUtils.normalizeOrientation(of: takenImage)
+ 
+     let width = takenImage.size.width

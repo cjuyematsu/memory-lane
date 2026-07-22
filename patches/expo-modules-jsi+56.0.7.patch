@@ -1,0 +1,20 @@
+diff --git a/node_modules/expo-modules-jsi/apple/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptValue.swift b/node_modules/expo-modules-jsi/apple/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptValue.swift
+index ba58f9e..8f6af21 100644
+--- a/node_modules/expo-modules-jsi/apple/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptValue.swift
++++ b/node_modules/expo-modules-jsi/apple/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptValue.swift
+@@ -221,7 +221,14 @@ public final class JavaScriptValue: JavaScriptType, Equatable, Escapable, Error
+         let property = object.getProperty(propertyName)
+         // Undefined property values are dropped so the resulting dictionary only
+         // carries keys that were actually assigned a value on the JS side.
+-        if !property.isUndefined() {
++        // Function, symbol and bigint values have no dictionary representation
++        // and are dropped too: recursing into them traps (FatalError), which
++        // used to crash when a SharedObject (whose enumerable properties
++        // include its methods) was passed to an Either-typed argument — the
++        // Either cast probes its non-object branches through getAny() and
++        // relies on a thrown conversion error, not a trap, to fall through to
++        // the matching branch (e.g. ImageManipulator.manipulate(pictureRef)).
++        if !property.isUndefined() && !property.isFunction() && !property.isSymbol() && !property.isBigInt() {
+           result[propertyName] = property.getAny()
+         }
+       }

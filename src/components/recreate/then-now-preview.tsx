@@ -1,6 +1,15 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import Animated, {
+  Easing,
+  interpolate,
+  useAnimatedStyle,
+  useSharedValue,
+  withDelay,
+  withTiming,
+} from 'react-native-reanimated';
 
+import { type SharedRefType } from 'expo';
 import { Image, type ImageLoadEventData } from 'expo-image';
 
 import { DisplayFont, Ink, Letterbox, Paper, PhotoRatio } from '@/constants/theme';
@@ -25,16 +34,19 @@ const FRAME_RADIUS = 18;
 // photo it degrades to a labeled panel, as the inset it quietly disappears.
 export function ThenNowPreview({
   thenUri,
-  nowUri,
+  nowSource,
   thenCreationTime,
   distanceM = null,
   primary,
   onSwap,
   showInset = true,
   tone = 'dark',
+  settleFrom = null,
 }: {
   thenUri: string;
-  nowUri: string;
+  // Fresh captures hand the native image ref (renders instantly, no file
+  // round-trip); the gallery viewer passes the persisted file uri.
+  nowSource: string | SharedRefType<'image'>;
   thenCreationTime: number | null;
   // How far from the original spot the retake was captured, when known.
   distanceM?: number | null;
@@ -44,11 +56,26 @@ export function ThenNowPreview({
   showInset?: boolean;
   // Caption color context: 'dark' = white text (review), 'light' = ink (viewer).
   tone?: 'light' | 'dark';
+  // Shared-element settle: a window-coordinate rect the photo frame should
+  // visually START at (the camera preview box), shrinking into its layout
+  // position on mount. The review passes the camera's frameLayout rect so a
+  // fresh capture reads as the frozen shot settling into the review card
+  // instead of cutting between two sizes. null (the default) renders
+  // statically.
+  settleFrom?: { top: number; left: number; width: number; height: number } | null;
 }) {
   const [box, setBox] = useState<{ w: number; h: number } | null>(null);
   // Keyed by uri so a reused element can't carry a failure across items.
   const [thenFailedFor, setThenFailedFor] = useState<string | null>(null);
   const thenFailed = thenFailedFor === thenUri;
+  // Keyed like the failure state. Fresh captures open with the "then" photo
+  // as the inset, and its ph:// load lands a beat after mount — rendering the
+  // white-bordered box before the photo made the review visibly assemble in
+  // pieces. The inset stays invisible until the then-image has real pixels;
+  // once loaded it stays visible across primary swaps (both images are
+  // decoded by then, so swaps never re-blank).
+  const [thenLoadedFor, setThenLoadedFor] = useState<string | null>(null);
+  const thenLoaded = thenLoadedFor === thenUri;
 
   // Same cover/contain rule as everywhere for the old photo when it's the big
   // one (an inset is always cover): seeded from the shared ratio cache,
@@ -69,12 +96,64 @@ export function ThenNowPreview({
   }
   const inset = frameW > 0 ? computeThenNowInset(frameW, PhotoRatio) : null;
 
+  // The settle: once the frame has a real window position, jump it to the
+  // camera rect (center-anchored scale keeps the math exact: translate by the
+  // center delta, scale by the width ratio) and ease home. The frame stays
+  // invisible for the one frame before measurement so it can't flash at its
+  // final position first; the caption fades in on the settle's tail so the
+  // big frame never slides over already-visible text. All no-ops when
+  // `settleFrom` is null.
+  const settleDone = useRef(false);
+  const settle = useSharedValue(settleFrom ? 0 : 1);
+  const settleReady = useSharedValue(settleFrom ? 0 : 1);
+  const settleDx = useSharedValue(0);
+  const settleDy = useSharedValue(0);
+  const settleScale = useSharedValue(1);
+  const frameRef = useRef<View>(null);
+  const onFrameLayout = () => {
+    if (!settleFrom || settleDone.current) return;
+    frameRef.current?.measureInWindow((x, y, w, h) => {
+      if (settleDone.current || !w || !h) return;
+      settleDone.current = true;
+      settleDx.value = settleFrom.left + settleFrom.width / 2 - (x + w / 2);
+      settleDy.value = settleFrom.top + settleFrom.height / 2 - (y + h / 2);
+      settleScale.value = settleFrom.width / w;
+      settleReady.value = 1;
+      // Small delay: the host crossfades the review in over the frozen
+      // capture (~200ms); holding at the camera rect until that blend is
+      // mostly done means the fade is invisible (identical pixels on
+      // identical rects) and the settle then moves a fully-opaque frame.
+      settle.value = withDelay(
+        120,
+        withTiming(1, {
+          duration: 420,
+          easing: Easing.out(Easing.cubic),
+        })
+      );
+    });
+  };
+  const frameSettleStyle = useAnimatedStyle(() => ({
+    opacity: settleReady.value,
+    transform: [
+      { translateX: settleDx.value * (1 - settle.value) },
+      { translateY: settleDy.value * (1 - settle.value) },
+      { scale: settleScale.value + (1 - settleScale.value) * settle.value },
+    ],
+  }));
+  const captionSettleStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(settle.value, [0.55, 1], [0, 1], 'clamp'),
+  }));
+
   const bigIsThen = showInset && primary === 'then';
-  const bigUri = bigIsThen ? thenUri : nowUri;
-  const insetUri = bigIsThen ? nowUri : thenUri;
+  // expo-image takes either a {uri} source or a SharedRefType<'image'> directly.
+  const asSource = (s: string | SharedRefType<'image'>) =>
+    typeof s === 'string' ? { uri: s } : s;
+  const bigSource = asSource(bigIsThen ? thenUri : nowSource);
+  const insetSource = asSource(bigIsThen ? nowSource : thenUri);
   const insetIsThen = !bigIsThen;
 
   const onThenLoad = (e: ImageLoadEventData) => {
+    setThenLoadedFor(thenUri);
     const { width: w, height: h } = e.source ?? {};
     if (w && h) {
       setAssetRatio(thenUri, w / h);
@@ -91,7 +170,10 @@ export function ThenNowPreview({
       }>
       {box && frameW > 0 && inset ? (
         <>
-          <View style={[styles.frame, { width: frameW, height: frameH }]}>
+          <Animated.View
+            ref={frameRef}
+            onLayout={onFrameLayout}
+            style={[styles.frame, { width: frameW, height: frameH }, frameSettleStyle]}>
             {bigIsThen && thenFailed ? (
               <View style={styles.missing}>
                 <Text style={styles.missingLabel}>
@@ -100,7 +182,7 @@ export function ThenNowPreview({
               </View>
             ) : (
               <Image
-                source={{ uri: bigUri }}
+                source={bigSource}
                 style={StyleSheet.absoluteFill}
                 contentFit={bigIsThen && thenLandscape ? 'contain' : 'cover'}
                 cachePolicy="memory-disk"
@@ -123,10 +205,13 @@ export function ThenNowPreview({
                     height: inset.height,
                     borderWidth: inset.border,
                     borderRadius: inset.radius,
+                    // Invisible until the then-photo has pixels (see above);
+                    // a now-ref inset renders instantly and never hides.
+                    opacity: insetIsThen && !thenLoaded ? 0 : 1,
                   },
                 ]}>
                 <Image
-                  source={{ uri: insetUri }}
+                  source={insetSource}
                   style={StyleSheet.absoluteFill}
                   contentFit="cover"
                   cachePolicy="memory-disk"
@@ -143,8 +228,8 @@ export function ThenNowPreview({
                 </View>
               </Pressable>
             ) : null}
-          </View>
-          <View style={styles.captionBlock}>
+          </Animated.View>
+          <Animated.View style={[styles.captionBlock, captionSettleStyle]}>
             <Text style={[styles.caption, tone === 'light' ? styles.captionLight : null]}>
               {formatTimeAgo(thenCreationTime)}
             </Text>
@@ -153,7 +238,7 @@ export function ThenNowPreview({
                 {formatDistanceShort(distanceM)}
               </Text>
             ) : null}
-          </View>
+          </Animated.View>
         </>
       ) : null}
     </View>
