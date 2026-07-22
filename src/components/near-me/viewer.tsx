@@ -472,7 +472,17 @@ const ViewerPage = memo(function ViewerPage({
 
   return (
     <View style={{ width, height, backgroundColor: Paper }}>
-      <PhotoFrame screenW={width} top={top} width={frameW} height={frameH} left={frameLeft}>
+      {/* Quiet gray until anything paints (blur or final): opening/swiping to a
+          still-loading photo used to pop an empty black-outlined frame first,
+          which read as a glitch against the white canvas. The black chrome now
+          arrives with the image itself. */}
+      <PhotoFrame
+        screenW={width}
+        top={top}
+        width={frameW}
+        height={frameH}
+        left={frameLeft}
+        placeholder={!load.showing}>
         <PinchZoom onActiveChange={onZoomChange}>
           {thumbnailUri && !(stalled && !load.preview) ? (
             <Image

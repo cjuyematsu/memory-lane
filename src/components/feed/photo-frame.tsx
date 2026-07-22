@@ -64,6 +64,7 @@ export function PhotoFrame({
   width,
   height,
   left,
+  placeholder = false,
   children,
 }: {
   screenW?: number;
@@ -74,12 +75,18 @@ export function PhotoFrame({
   width?: number;
   height?: number;
   left?: number;
+  // While true, render the quiet grid-tile look (rounded placeholder gray)
+  // instead of the black frame — for callers that know nothing has painted
+  // yet, so an empty page doesn't pop up as a black-outlined box before the
+  // photo arrives. The black chrome appears together with the image.
+  placeholder?: boolean;
   children?: ReactNode;
 }) {
   return (
     <View
       style={[
         styles.frame,
+        placeholder && styles.framePlaceholder,
         {
           top,
           left: left ?? FrameMargin,
@@ -101,5 +108,12 @@ const styles = StyleSheet.create({
     borderColor: Letterbox,
     backgroundColor: Letterbox,
     overflow: 'hidden',
+  },
+  // Same placeholder gray + rounding as the grid tiles, so a not-yet-painted
+  // page reads as "loading tile" rather than an empty black frame.
+  framePlaceholder: {
+    borderColor: '#E9E9E9',
+    backgroundColor: '#E9E9E9',
+    borderRadius: 6,
   },
 });
