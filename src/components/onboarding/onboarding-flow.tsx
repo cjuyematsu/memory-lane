@@ -18,7 +18,7 @@ import BellIcon from '@/assets/icons/bell.svg';
 import { SpectrumRule } from '@/components/brand/spectrum-rule';
 import { MockFeedCard, MockGrid } from '@/components/onboarding/mocks';
 import { CooldownPicker } from '@/components/notifications/cooldown-picker';
-import { Colors, DisplayFont, HeaderHeight, Ink, Paper, PhotoRatio } from '@/constants/theme';
+import { Colors, DisplayFont, HeaderHeight, Ink, InkFaint, Paper, PhotoRatio } from '@/constants/theme';
 import { Asset } from 'expo-media-library';
 
 import { ensureAssetsLoaded } from '@/hooks/use-asset-feed';
@@ -371,7 +371,12 @@ export function OnboardingFlow() {
   // caption. Every hero is sized to roughly fill this stage so none floats as a
   // tiny mark. Capped fraction of screen height so the tallest step still clears
   // the pinned footer on the shortest supported screen (iOS 16.4 floor = 667pt).
-  const stageH = Math.min(230, height * 0.28);
+  // Short screens (iPhone SE class, 667pt) also compress the stage and the top
+  // anchor below — without it the tallest step (remind: 4-line body + the
+  // cooldown pill) runs under the pinned footer and the pill hides behind the
+  // primary button.
+  const shortScreen = height < 700;
+  const stageH = Math.min(230, height * (shortScreen ? 0.22 : 0.28));
   const previewWidth = Math.min(width - 96, 280);
   // Welcome / done polaroid, sized from the asset aspect. This is the reference
   // footprint every other hero is sized against, so no step's visual dwarfs the
@@ -391,7 +396,7 @@ export function OnboardingFlow() {
   // Top-anchor the hero + title at a fixed offset (rather than centering the whole
   // block) so they land at the same Y on every step; only the body text below grows
   // with longer copy, and the footer stays pinned — keeps the eye from jumping.
-  const contentTop = Math.min(Math.max(height * 0.08, 28), 88);
+  const contentTop = shortScreen ? 20 : Math.min(Math.max(height * 0.08, 28), 88);
 
   const content: StepContent = (() => {
     switch (key) {
@@ -658,7 +663,7 @@ const styles = StyleSheet.create({
     maxWidth: 320,
   },
   reassure: {
-    color: '#999',
+    color: InkFaint,
     fontSize: 12,
     lineHeight: 16,
     textAlign: 'center',
