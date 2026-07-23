@@ -51,6 +51,23 @@ function getCacheFile() {
   return new File(Paths.cache, SCREENSHOT_CACHE_FILE);
 }
 
+// Validating parser (same pattern as parseRatios/parseRecreations): only
+// string→boolean entries survive, anything else is dropped element-wise so a
+// corrupt or legacy shape can't silently misclassify photos as screenshots.
+export function parseScreenshotCache(text: string): Record<string, boolean> {
+  const out: Record<string, boolean> = {};
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return out;
+    for (const [id, v] of Object.entries(parsed)) {
+      if (typeof v === 'boolean') out[id] = v;
+    }
+  } catch {
+    // corrupt file → empty cache, entries re-derive from the library
+  }
+  return out;
+}
+
 async function loadScreenshotCacheFromDisk(): Promise<void> {
   if (screenshotCacheLoaded) return;
   screenshotCacheLoaded = true;
@@ -58,12 +75,11 @@ async function loadScreenshotCacheFromDisk(): Promise<void> {
     const file = getCacheFile();
     if (!file.exists) return;
     const text = await file.text();
-    const parsed = JSON.parse(text) as Record<string, boolean>;
-    for (const [id, v] of Object.entries(parsed)) {
+    for (const [id, v] of Object.entries(parseScreenshotCache(text))) {
       screenshotCache.set(id, v);
     }
   } catch {
-    // ignore corrupt cache
+    // ignore unreadable cache
   }
 }
 

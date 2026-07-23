@@ -28,6 +28,7 @@ import { type CapturedPhoto } from '@/components/recreate/recreation-host';
 import { DisplayFont, Ink, Letterbox, Paper } from '@/constants/theme';
 import { loadAssetLocation } from '@/hooks/use-asset-metadata';
 import { useCurrentLocation } from '@/hooks/use-current-location';
+import { withTimeout } from '@/lib/async-safety';
 import { getAssetRatio, setAssetRatio } from '@/lib/asset-ratio-cache';
 import { type RecreationTarget } from '@/lib/recreation-request';
 import { distanceMeters, formatDistanceHint } from '@/utils/distance';
@@ -37,6 +38,10 @@ import { distanceMeters, formatDistanceHint } from '@/utils/distance';
 const GHOST_LEVELS = [0, 0.55, 0.3] as const;
 
 const PREVIEW_RADIUS = 18;
+
+// A native capture that neither resolves nor rejects would leave the shutter
+// disabled and the preview frozen forever; the timeout re-arms the screen.
+const SHUTTER_TIMEOUT_MS = 8000;
 
 // The retake camera, styled like a real camera app: black chrome, a large
 // rounded preview, and a white photo-style ring shutter (hollow — a filled
@@ -144,7 +149,7 @@ export function RecreationCamera({
       // frozen frame the same instant.
       const capture = cameraRef.current?.takePictureAsync({ pictureRef: true });
       cameraRef.current?.pausePreview();
-      const pic = await capture;
+      const pic = capture ? await withTimeout(capture, SHUTTER_TIMEOUT_MS, 'camera capture') : undefined;
       if (pic) {
         let ref: SharedRefType<'image'> = pic;
         let width = pic.width;
@@ -158,9 +163,11 @@ export function RecreationCamera({
           // failed flip falls back to the mirrored original rather than
           // losing the shot.
           try {
-            flipped = await ImageManipulator.manipulate(pic)
-              .flip('horizontal')
-              .renderAsync();
+            flipped = await withTimeout(
+              ImageManipulator.manipulate(pic).flip('horizontal').renderAsync(),
+              SHUTTER_TIMEOUT_MS,
+              'selfie un-mirror'
+            );
             ref = flipped;
             width = flipped.width;
             height = flipped.height;

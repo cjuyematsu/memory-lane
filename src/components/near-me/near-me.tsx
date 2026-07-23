@@ -8,7 +8,7 @@ import { ClusterView } from '@/components/near-me/cluster-view';
 import { Grid } from '@/components/near-me/grid';
 import { SetupNote } from '@/components/near-me/setup-note';
 import { Viewer } from '@/components/near-me/viewer';
-import { DisplayFont, Ink, Paper } from '@/constants/theme';
+import { DisplayFont, Ink, InkMuted, Paper } from '@/constants/theme';
 import { markDecodeBurst } from '@/lib/decode-burst';
 import { subscribeNearMeRequest } from '@/lib/near-me-request';
 import { setPendingCluster, usePendingCluster } from '@/lib/pending-cluster';
@@ -38,6 +38,10 @@ const BUSY_MIN_MS = 1200;
 // iCloud-offloaded library) explains itself, long enough that fast/warm launches
 // never flash it.
 const SLOW_NOTE_DELAY_MS = 2000;
+// If the cold-load polaroid is STILL up after this long, something upstream
+// stalled (feed hook, location, index build) — surface a manual Retry escape
+// instead of trusting the internal timeouts to always terminate.
+const STUCK_RETRY_DELAY_MS = 30000;
 
 export function NearMe({
   isActive = true,
@@ -91,6 +95,7 @@ export function NearMe({
   // "Setting up Near Me" note (the slow first build is the only thing that keeps
   // us here this long).
   const [showSlowNote, setShowSlowNote] = useState(false);
+  const [showStuckRetry, setShowStuckRetry] = useState(false);
   // `accepting` opens a short window (after a trigger) during which we adopt each
   // freshly-settled `items` into the snapshot; outside it the grid is frozen.
   const [accepting, setAccepting] = useState(false);
@@ -174,6 +179,14 @@ export function NearMe({
     return () => clearTimeout(t);
   }, [displayItems]);
 
+  // Escape hatch for a wedged cold load. Tapping Retry resets the flag, which
+  // re-runs this effect and re-arms a fresh 30s window for the new attempt.
+  useEffect(() => {
+    if (displayItems !== null || showStuckRetry) return;
+    const t = setTimeout(() => setShowStuckRetry(true), STUCK_RETRY_DELAY_MS);
+    return () => clearTimeout(t);
+  }, [displayItems, showStuckRetry]);
+
   // Clear any pending timers on unmount.
   useEffect(() => {
     return () => {
@@ -194,8 +207,8 @@ export function NearMe({
     if (busyTimer.current) clearTimeout(busyTimer.current);
     busyTimer.current = setTimeout(() => setBusy(false), BUSY_MIN_MS);
     arm();
-    refreshLocation();
-    refreshNearby();
+    void refreshLocation();
+    void refreshNearby();
     void reloadFeed();
   }, [arm, refreshLocation, reloadFeed]);
 
@@ -251,6 +264,19 @@ export function NearMe({
       </SafeAreaView>
     );
   }
+
+  // Under-polaroid content for the cold-load branches: the setup note once the
+  // load is merely slow, plus the manual Retry once it looks wedged.
+  const stuckRetryNote = showStuckRetry ? (
+    <Pressable
+      style={[styles.button, { marginTop: 14 }]}
+      onPress={() => {
+        setShowStuckRetry(false);
+        onUserRefresh();
+      }}>
+      <Text style={styles.buttonLabel}>Retry</Text>
+    </Pressable>
+  ) : null;
 
   // The normal Near Me body. Rendered underneath the memories cluster view so
   // that swiping the cluster view away reveals this instead of a black screen.
@@ -317,7 +343,7 @@ export function NearMe({
         feedState.status === 'idle' ||
         feedState.status === 'loading')
     ) {
-      return <LoadingPolaroid />;
+      return <LoadingPolaroid note={stuckRetryNote ?? undefined} />;
     }
     if (feedState.status === 'error') {
       return (
@@ -361,7 +387,16 @@ export function NearMe({
         )}
       </SafeAreaView>
     ) : (
-      <LoadingPolaroid note={showSlowNote ? <SetupNote /> : undefined} />
+      <LoadingPolaroid
+        note={
+          showSlowNote || stuckRetryNote ? (
+            <>
+              {showSlowNote ? <SetupNote /> : null}
+              {stuckRetryNote}
+            </>
+          ) : undefined
+        }
+      />
     );
   })();
 
@@ -446,7 +481,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   emptySub: {
-    color: '#777',
+    color: InkMuted,
     fontSize: 14,
     textAlign: 'center',
   },
