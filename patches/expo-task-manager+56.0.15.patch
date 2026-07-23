@@ -1,0 +1,128 @@
+diff --git a/node_modules/expo-task-manager/ios/EXTaskManager/EXTaskService.m b/node_modules/expo-task-manager/ios/EXTaskManager/EXTaskService.m
+index d9d23aa..50c8ef8 100644
+--- a/node_modules/expo-task-manager/ios/EXTaskManager/EXTaskService.m
++++ b/node_modules/expo-task-manager/ios/EXTaskManager/EXTaskService.m
+@@ -229,23 +229,38 @@
+     }
+   }
+   
+-  // Remove event and maybe invalidate related app record
+-  NSMutableArray *appEvents = _events[appId];
+-  
+-  if (appEvents) {
+-    [appEvents removeObject:eventId];
+-    
+-    if (appEvents.count == 0) {
+-      [self->_events removeObjectForKey:appId];
+-      
+-      // Invalidate app record but after 1 seconds delay so we can still take batched events.
+-      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+-        if (!self->_events[appId]) {
+-          [self _invalidateAppWithId:appId];
+-        }
+-      });
++  // Remove event and maybe invalidate related app record.
++  // `_events` is mutated from multiple threads (task executions land on the
++  // location-delegate/main thread via executeTask, while JS task-finish calls
++  // land on expo.modules.AsyncFunctionQueue) — unsynchronized NSMutableArray
++  // mutation corrupts the array and removeObject:'s isEqual: walk then traps
++  // (EXC_BREAKPOINT in __StringStorage.isEqualToString). Guard every
++  // _events/_eventsQueues access with one lock.
++  BOOL becameEmpty = NO;
++  @synchronized (_events) {
++    NSMutableArray *appEvents = _events[appId];
++
++    if (appEvents) {
++      [appEvents removeObject:eventId];
++
++      if (appEvents.count == 0) {
++        [self->_events removeObjectForKey:appId];
++        becameEmpty = YES;
++      }
+     }
+   }
++  if (becameEmpty) {
++    // Invalidate app record but after 1 seconds delay so we can still take batched events.
++    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
++      BOOL stillEmpty;
++      @synchronized (self->_events) {
++        stillEmpty = self->_events[appId] == nil;
++      }
++      if (stillEmpty) {
++        [self _invalidateAppWithId:appId];
++      }
++    });
++  }
+ }
+ 
+ - (void)setTaskManager:(id<EXTaskManagerInterface>)taskManager
+@@ -261,8 +276,13 @@
+   // Set task manager in appropriate table.
+   [taskManagersTable setObject:taskManager forKey:appId];
+   
+-  // Execute events waiting for the task manager.
+-  NSMutableArray *appEventQueue = _eventsQueues[appId];
++  // Execute events waiting for the task manager. Snapshot + clear under the
++  // lock; execute outside it (executeWithBody can re-enter this service).
++  NSArray *appEventQueue;
++  @synchronized (_events) {
++    appEventQueue = [_eventsQueues[appId] copy];
++    [_eventsQueues removeObjectForKey:appId];
++  }
+ 
+   if (appEventQueue) {
+     for (NSDictionary *body in appEventQueue) {
+@@ -270,9 +290,6 @@
+     }
+   }
+   
+-  // Remove events queue for that app.
+-  [_eventsQueues removeObjectForKey:appId];
+-  
+   if (!isHeadless) {
+     // Maybe update app url in user defaults. It might change only in non-headless mode.
+     [self _maybeUpdateAppUrl:appUrl forAppId:appId];
+@@ -296,9 +313,12 @@
+   NSLog(@"EXTaskService: Executing task '%@' for app '%@'.", task.name, task.appId);
+   
+   // Save an event so we can keep tracking events for this app
+-  NSMutableArray *appEvents = _events[task.appId] ?: [NSMutableArray new];
+-  [appEvents addObject:executionInfo[@"eventId"]];
+-  [_events setObject:appEvents forKey:task.appId];
++  // (see notifyTaskWithName: — all _events/_eventsQueues access is locked).
++  @synchronized (_events) {
++    NSMutableArray *appEvents = _events[task.appId] ?: [NSMutableArray new];
++    [appEvents addObject:executionInfo[@"eventId"]];
++    [_events setObject:appEvents forKey:task.appId];
++  }
+ 
+   if (taskManager != nil) {
+     // Task manager is initialized and can execute events
+@@ -313,9 +333,11 @@
+ 
+   // App record for that app exists, but it's not fully loaded as its task manager is not there yet.
+   // We need to add event's body to the queue from which events will be executed once the task manager is ready.
+-  NSMutableArray *appEventsQueue = _eventsQueues[task.appId] ?: [NSMutableArray new];
+-  [appEventsQueue addObject:body];
+-  [_eventsQueues setObject:appEventsQueue forKey:task.appId];
++  @synchronized (_events) {
++    NSMutableArray *appEventsQueue = _eventsQueues[task.appId] ?: [NSMutableArray new];
++    [appEventsQueue addObject:body];
++    [_eventsQueues setObject:appEventsQueue forKey:task.appId];
++  }
+   return;
+ }
+ 
+@@ -557,8 +579,10 @@
+     appRecord = [appLoader loadAppWithUrl:appUrl options:nil callback:^(BOOL success, NSError *error) {
+       if (!success) {
+         NSLog(@"EXTaskService: Loading app '%@' from url '%@' failed. Error description: %@", appId, appUrl, error.description);
+-        [self->_events removeObjectForKey:appId];
+-        [self->_eventsQueues removeObjectForKey:appId];
++        @synchronized (self->_events) {
++          [self->_events removeObjectForKey:appId];
++          [self->_eventsQueues removeObjectForKey:appId];
++        }
+         [self->_appRecords removeObjectForKey:appId];
+         
+         // Host unreachable? Unregister all tasks for that app.
