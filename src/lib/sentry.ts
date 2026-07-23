@@ -3,9 +3,11 @@ import type { ComponentType } from 'react';
 
 import { setCrashForwarder } from '@/lib/crash-log';
 
-// Paste the DSN from sentry.io → Project Settings → Client Keys. Until it's
-// set, Sentry stays fully disabled and the app behaves exactly as before.
-const SENTRY_DSN = '';
+// DSN from sentry.io (org uyeyu, project react-native). Not a secret — it
+// ships in the binary and can only receive events. Clearing it fully
+// disables Sentry.
+const SENTRY_DSN =
+  'https://d10e02e88f18271bac87ecead053383e@o4511783007485952.ingest.us.sentry.io/4511783019282432';
 
 // Crash reporting only, and only in release builds: dev keeps LogBox/redbox
 // untouched, and the privacy posture stays "photos never leave the phone" —
