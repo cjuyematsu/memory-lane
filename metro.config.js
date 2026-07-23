@@ -1,6 +1,8 @@
-const { getDefaultConfig } = require('expo/metro-config');
+// Sentry's Expo metro config = expo/metro-config plus source-map/debug-id
+// serializer hooks (needed so release stack traces symbolicate on sentry.io).
+const { getSentryExpoConfig } = require('@sentry/react-native/metro');
 
-const config = getDefaultConfig(__dirname);
+const config = getSentryExpoConfig(__dirname);
 
 config.transformer = {
   ...config.transformer,

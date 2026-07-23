@@ -35,7 +35,13 @@ import { hydrateAssetRatios } from '@/lib/asset-ratio-cache';
 import { initCrashReporting, logBoundaryError } from '@/lib/crash-log';
 import { configureImageCache, installMemoryCacheReaper } from '@/lib/image-cache';
 import { FONT_LOAD_MS } from '@/lib/loading-timeouts';
+import { initSentry, wrapRoot } from '@/lib/sentry';
 
+// Sentry first, then the on-disk crash log: crash-log's ErrorUtils handler
+// delegates to the previously-installed one, so this order means a fatal is
+// recorded locally AND reaches Sentry (which delegates on to RN's default).
+// No-op until a DSN is set in lib/sentry.ts, and always disabled in dev.
+initSentry();
 // Install the global error handler + rejection tracker before anything else
 // can throw, so even a boot-path failure lands in the on-disk crash log.
 // (Imports hoist, so the geofence-manager defineTask registration above still
@@ -59,7 +65,7 @@ SplashScreen.preventAutoHideAsync().catch(() => {});
 const MIN_LOADER_MS = 1000;
 const LOADER_FADE_MS = 300;
 
-export default function RootLayout() {
+function RootLayout() {
   const colorScheme = useColorScheme();
   // Archivo Expanded Black. The key is the family name referenced as
   // `DisplayFont` in the type system; loaded at runtime so no rebuild is needed.
@@ -199,6 +205,10 @@ export default function RootLayout() {
     </GestureHandlerRootView>
   );
 }
+
+// Sentry's HOC adds touch-event breadcrumbs and native-frame context to
+// reports; a plain pass-through until a DSN is configured (lib/sentry.ts).
+export default wrapRoot(RootLayout);
 
 const styles = StyleSheet.create({
   loaderOverlay: {

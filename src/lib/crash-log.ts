@@ -127,6 +127,16 @@ let hydration: Promise<void> | null = null;
 let initialized = false;
 let rejectionCount = 0;
 
+// Optional secondary sink (Sentry, see lib/sentry.ts) for the error classes
+// that don't flow through the ErrorUtils chain: unhandled rejections (we own
+// the Hermes tracker in release) and error-boundary catches. Registered as a
+// callback so this module never imports the SDK — tests and dev stay clean.
+let forwardError: ((err: unknown) => void) | null = null;
+
+export function setCrashForwarder(fn: (err: unknown) => void): void {
+  forwardError = fn;
+}
+
 export function breadcrumb(tag: string): void {
   try {
     crumbs.push(`${Date.now() - launchAt}ms ${tag}`);
@@ -158,6 +168,11 @@ function record(kind: CrashKind, tag: string | undefined, err: unknown): void {
 
 export function logBoundaryError(tag: string, error: Error): void {
   record('boundary', tag, error);
+  try {
+    forwardError?.(error);
+  } catch {
+    // never let telemetry throw
+  }
 }
 
 export async function getCrashLogText(): Promise<string> {
@@ -220,6 +235,13 @@ export function initCrashReporting(): void {
         hermes.enablePromiseRejectionTracker({
           allRejections: true,
           onUnhandled: (_id, rejection) => {
+            // Forward every rejection (Sentry dedupes client-side); only the
+            // on-disk log is capped against pathological rejection loops.
+            try {
+              forwardError?.(rejection);
+            } catch {
+              // never let telemetry throw
+            }
             if (rejectionCount >= MAX_REJECTION_ENTRIES) return;
             rejectionCount += 1;
             record('rejection', undefined, rejection);
