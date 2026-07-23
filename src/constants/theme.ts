@@ -68,7 +68,11 @@ export const MaxContentWidth = 800;
 // Light "gallery" look: photos framed on white, Archivo Expanded Black type.
 export const Paper = '#FFFFFF'; // app canvas
 export const Ink = '#111111'; // text, borders — every black EXCEPT the letterbox
+export const InkMuted = '#777777'; // secondary/supporting text
+export const InkFaint = '#999999'; // tertiary hints, timestamps, footnotes
 export const Letterbox = '#000000'; // fill behind a contained (landscape) photo
+export const PhotoPlaceholder = '#E9E9E9'; // quiet gray behind a photo that hasn't decoded yet
+export const CardBorder = 'rgba(17,17,17,0.10)'; // hairline border on floating cards/banners
 export const DisplayFont = 'ArchivoExpanded-Black'; // see assets/fonts + _layout useFonts
 
 // Brand accent, drawn from the logo. The gallery look stays monochrome around

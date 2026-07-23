@@ -6,7 +6,7 @@ import { Image } from 'expo-image';
 import { MediaType } from 'expo-media-library';
 
 import RefreshIcon from '@/assets/icons/refresh.svg';
-import { Ink, Paper } from '@/constants/theme';
+import { Ink, Paper, PhotoPlaceholder } from '@/constants/theme';
 import { useIcloudImageLoad } from '@/hooks/use-icloud-image-load';
 import type { NearbyAsset } from '@/hooks/use-nearby-assets';
 import { setAssetRatio } from '@/lib/asset-ratio-cache';
@@ -250,7 +250,7 @@ const styles = StyleSheet.create({
     // gutter already shows the Paper canvas between tiles, so the rounding reads
     // cleanly against white.
     borderRadius: 6,
-    backgroundColor: '#E9E9E9',
+    backgroundColor: PhotoPlaceholder,
     overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',

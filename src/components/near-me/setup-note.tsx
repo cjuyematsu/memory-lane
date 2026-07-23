@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
-import { DisplayFont, Ink } from '@/constants/theme';
+import { DisplayFont, Ink, InkFaint, InkMuted } from '@/constants/theme';
 import { getBuildProgress, subscribeBuildProgress } from '@/hooks/use-located-assets';
 import { SETUP_NOTE_HINT, SETUP_NOTE_TITLE, setupNoteSubtitle } from '@/lib/setup-note';
 
@@ -36,13 +36,13 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   sub: {
-    color: '#777',
+    color: InkMuted,
     fontSize: 13,
     lineHeight: 18,
     textAlign: 'center',
   },
   hint: {
-    color: '#999',
+    color: InkFaint,
     fontSize: 12,
     lineHeight: 16,
     textAlign: 'center',

@@ -15,7 +15,7 @@ import {
 
 import { CooldownPicker } from '@/components/notifications/cooldown-picker';
 import { PermissionsPanel } from '@/components/notifications/permissions-sheet';
-import { DisplayFont, Ink, Paper } from '@/constants/theme';
+import { DisplayFont, Ink, InkMuted, Paper } from '@/constants/theme';
 import { diagnoseAndroidMetadata } from '@/lib/android-metadata-diagnostic';
 import { getCrashLogText } from '@/lib/crash-log';
 import {
@@ -342,7 +342,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   rowSub: {
-    color: '#777',
+    color: InkMuted,
     fontSize: 13,
     lineHeight: 18,
   },
@@ -397,7 +397,7 @@ const styles = StyleSheet.create({
     lineHeight: 24,
   },
   privacyNote: {
-    color: '#777',
+    color: InkMuted,
     fontSize: 12,
     lineHeight: 17,
   },

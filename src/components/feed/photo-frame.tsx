@@ -1,7 +1,7 @@
 import { type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import { FrameMargin, HeaderHeight, Letterbox, PhotoRatio } from '@/constants/theme';
+import { FrameMargin, HeaderHeight, Letterbox, PhotoPlaceholder, PhotoRatio } from '@/constants/theme';
 
 const HEADER_GAP = 16;
 
@@ -112,8 +112,8 @@ const styles = StyleSheet.create({
   // Same placeholder gray + rounding as the grid tiles, so a not-yet-painted
   // page reads as "loading tile" rather than an empty black frame.
   framePlaceholder: {
-    borderColor: '#E9E9E9',
-    backgroundColor: '#E9E9E9',
+    borderColor: PhotoPlaceholder,
+    backgroundColor: PhotoPlaceholder,
     borderRadius: 6,
   },
 });

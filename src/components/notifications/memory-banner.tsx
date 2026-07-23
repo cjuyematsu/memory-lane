@@ -10,7 +10,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { scheduleOnRN } from 'react-native-worklets';
 
 import BellIcon from '@/assets/icons/bell.svg';
-import { Colors, DisplayFont, Ink, Paper } from '@/constants/theme';
+import { CardBorder, Colors, DisplayFont, Ink, Paper } from '@/constants/theme';
 import { clearBanner, useBanner } from '@/lib/foreground-banner';
 import { requestNearMe } from '@/lib/near-me-request';
 
@@ -122,7 +122,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     backgroundColor: Paper,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(17,17,17,0.10)',
+    borderColor: CardBorder,
     shadowColor: '#000',
     shadowOpacity: 0.12,
     shadowRadius: 16,

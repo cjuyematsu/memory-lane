@@ -14,7 +14,7 @@ import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 
 import ArrowLeftIcon from '@/assets/icons/arrow-left.svg';
-import { DisplayFont, Ink, Paper } from '@/constants/theme';
+import { DisplayFont, Ink, InkMuted, Paper } from '@/constants/theme';
 import { useMediaPermission } from '@/hooks/use-media-permission';
 
 type Status = 'granted' | 'denied' | 'undetermined' | 'unknown';
@@ -188,14 +188,14 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   statusText: {
-    color: '#777',
+    color: InkMuted,
     fontSize: 13,
   },
   statusTextOn: {
     color: Ink,
   },
   note: {
-    color: '#777',
+    color: InkMuted,
     fontSize: 12,
     lineHeight: 17,
   },

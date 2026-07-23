@@ -2,6 +2,7 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import BellIcon from '@/assets/icons/bell.svg';
 import {
+  CardBorder,
   Colors,
   DisplayFont,
   Ink,
@@ -119,7 +120,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     backgroundColor: Paper,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(17,17,17,0.10)',
+    borderColor: CardBorder,
     shadowColor: '#000',
     shadowOpacity: 0.12,
     shadowRadius: 16,
