@@ -207,6 +207,10 @@ export const FeedCard = memo(function FeedCard({
                   <Text style={styles.loadingSubtext}>
                     Free up space to load iCloud photos
                   </Text>
+                ) : load.offline ? (
+                  <Text style={styles.loadingSubtext}>
+                    You’re offline. Connect to load iCloud photos
+                  </Text>
                 ) : null}
                 <Pressable onPress={load.retry} hitSlop={12} style={styles.retryButton}>
                   <Text style={styles.retryLabel}>Retry</Text>

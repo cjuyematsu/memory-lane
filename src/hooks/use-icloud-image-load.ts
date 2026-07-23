@@ -136,6 +136,11 @@ export type IcloudImageLoad = LoadFlags & {
   // iCloud downloads have nowhere to land. Callers swap the generic "Photo
   // couldn't load" for a storage message when this is set.
   storageFull: boolean;
+  // True when the device looked offline at the moment the load became
+  // unreachable — an iCloud-only photo simply can't arrive. Callers add a
+  // "you're offline" explanation so Retry doesn't read as broken (storageFull
+  // wins when both are set: freeing space is the actionable one).
+  offline: boolean;
   onLoad: (e: ImageLoadEventData) => void;
   onError: () => void;
   onProgress: (e: ImageProgressEventData) => void;
@@ -170,8 +175,17 @@ export function useIcloudImageLoad(
   // effect body). Global, not per-asset — displayed only alongside
   // `unreachable`, and re-evaluated at every new failure.
   const [storageFull, setStorageFull] = useState(false);
-  const markUnreachable = useCallback((id: string) => {
+  const [offline, setOffline] = useState(false);
+  const markUnreachable = useCallback((id: string, knownOffline?: boolean) => {
     setStorageFull(isDiskSpaceCritical());
+    if (knownOffline !== undefined) {
+      setOffline(knownOffline);
+    } else {
+      // Callers that didn't just probe (the stall deadline, onError) resolve it
+      // here; the flag lands a beat after `unreachable`, which is fine — it only
+      // refines the already-visible failure copy.
+      void isOnline().then((on) => setOffline(!on)).catch(() => {});
+    }
     dispatch({ type: 'unreachable', id });
   }, []);
 
@@ -206,7 +220,7 @@ export function useIcloudImageLoad(
       const online = await isOnline();
       if (cancelled) return;
       if (online) dispatch({ type: 'accessing', id: assetId });
-      else markUnreachable(assetId);
+      else markUnreachable(assetId, true);
     }, ICLOUD_ACCESS_HINT_MS);
     return () => {
       cancelled = true;
@@ -277,6 +291,7 @@ export function useIcloudImageLoad(
     reloadNonce: state.reloadNonce,
     progressPct,
     storageFull,
+    offline,
     onLoad,
     onError,
     onProgress,
