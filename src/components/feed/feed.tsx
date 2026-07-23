@@ -1107,6 +1107,15 @@ export function Feed({
                   </ErrorBoundary>
                 )}
                 scrollEnabled={!zooming}
+                // Stay anchored to the SAME photo when the library republishes
+                // with new items prepended (newest-first, so e.g. saving a
+                // retake composite adds a photo at index 0). Without this the
+                // rows shift under a fixed scroll offset, the viewport lands on
+                // the next-newer photo, and onViewableItemsChanged cements the
+                // wrong currentId. (Near Me's grid makes the opposite choice —
+                // new photos should appear at top there; here the user is
+                // looking at ONE photo and must not be moved off it.)
+                maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
                 pagingEnabled
                 snapToInterval={layout.height}
                 snapToAlignment="start"
