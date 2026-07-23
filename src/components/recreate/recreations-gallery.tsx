@@ -9,7 +9,7 @@ import SettingsIcon from '@/assets/icons/settings.svg';
 import { frameTop } from '@/components/feed/photo-frame';
 import { SettingsSheet } from '@/components/notifications/settings-sheet';
 import { RecreationViewer } from '@/components/recreate/recreation-viewer';
-import { DisplayFont, FrameMargin, Ink, Paper, PhotoRatio } from '@/constants/theme';
+import { CardBorder, DisplayFont, FrameMargin, Ink, Paper, PhotoPlaceholder, PhotoRatio } from '@/constants/theme';
 import { recreationUri, useRecreations, type Recreation } from '@/lib/recreations';
 
 const COLUMNS = 2;
@@ -38,16 +38,20 @@ export function RecreationsGallery({
   // The app's Settings gear lives here (this is the profile/"you" tab), floating
   // at the lower-right — the only place it's reachable now.
   const [settingsOpen, setSettingsOpen] = useState(false);
-  // Resolve from the live list so a delete inside the viewer can't strand a
-  // stale record here (the viewer freezes its own copy; this index only gates
-  // mounting). The viewer owns paging internally, like Near Me's.
+  // Mount is keyed on viewingId, NOT on the record still existing in the live
+  // list: deleting inside the viewer removes the record first (so the grid
+  // behind the fade updates immediately) while the viewer — which froze its own
+  // copy of the list on open — animates out and then calls onClose. Gating the
+  // mount on the live list yanked the viewer the same frame the record
+  // vanished. The index only seeds startIndex at mount, where the id always
+  // still exists (it was just tapped).
   const viewingIndex =
     viewingId != null && items != null ? items.findIndex((r) => r.id === viewingId) : -1;
 
   // Report viewer open/close up so TopTabs can gate the pager (same pattern as
   // Near Me). Derive the boolean so it only fires on open/close, not on every
   // list change while the viewer is up.
-  const viewerOpen = viewingIndex >= 0;
+  const viewerOpen = viewingId != null && items != null;
   useEffect(() => {
     onViewerOpenChange?.(viewerOpen);
   }, [viewerOpen, onViewerOpenChange]);
@@ -97,7 +101,7 @@ export function RecreationsGallery({
       {viewerOpen && items ? (
         <RecreationViewer
           items={items}
-          startIndex={viewingIndex}
+          startIndex={Math.max(0, viewingIndex)}
           onClose={() => setViewingId(null)}
         />
       ) : null}
@@ -167,7 +171,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: Paper,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(17,17,17,0.10)',
+    borderColor: CardBorder,
     shadowColor: '#000',
     shadowOpacity: 0.12,
     shadowRadius: 14,
@@ -196,7 +200,7 @@ const styles = StyleSheet.create({
     flex: 1,
     margin: GAP / 2,
     borderRadius: 6,
-    backgroundColor: '#E9E9E9',
+    backgroundColor: PhotoPlaceholder,
     overflow: 'hidden',
   },
   // Small "then" preview, bottom-left, in the app's 3:4 frame shape with a
@@ -211,6 +215,6 @@ const styles = StyleSheet.create({
     borderColor: Paper,
     borderRadius: 4,
     overflow: 'hidden',
-    backgroundColor: '#E9E9E9',
+    backgroundColor: PhotoPlaceholder,
   },
 });

@@ -115,10 +115,12 @@ export function Viewer({
     });
   }, [openProgress]);
 
+  // Ease-OUT so the fade starts the moment the tap lands (ease-in held near-full
+  // opacity then popped — read as jerky; same fix as the retake viewer).
   const handleClose = () => {
     openProgress.value = withTiming(
       0,
-      { duration: 200, easing: Easing.in(Easing.cubic) },
+      { duration: 160, easing: Easing.out(Easing.quad) },
       (finished) => {
         'worklet';
         if (finished) scheduleOnRN(onClose);
@@ -138,7 +140,13 @@ export function Viewer({
     })
     .onEnd((e) => {
       if (e.translationY > DISMISS_THRESHOLD) {
-        scheduleOnRN(onClose);
+        // Carry the drag through with a slide+fade instead of a hard cut
+        // (same fix as the retake viewer).
+        translateY.value = withTiming(height, { duration: 160, easing: Easing.out(Easing.quad) });
+        openProgress.value = withTiming(0, { duration: 160, easing: Easing.out(Easing.quad) }, () => {
+          'worklet';
+          scheduleOnRN(onClose);
+        });
       } else {
         translateY.value = withSpring(0);
         backdropOpacity.value = withSpring(1);
@@ -148,8 +156,12 @@ export function Viewer({
   const containerStyle = useAnimatedStyle(() => ({
     transform: [{ translateY: translateY.value }],
   }));
+  // Backdrop leads the open fade (opaque by the halfway point) and thins with
+  // a drag-dismiss; the content fades/scaling above it. Fading the whole
+  // viewer as one sheet double-exposed the photo onto the grid (mushy
+  // ghosting) — same two-layer recipe as the retake viewer.
   const backdropStyle = useAnimatedStyle(() => ({
-    opacity: backdropOpacity.value,
+    opacity: Math.min(1, openProgress.value * 2) * backdropOpacity.value,
   }));
   const openStyle = useAnimatedStyle(() => ({
     opacity: openProgress.value,
@@ -216,8 +228,9 @@ export function Viewer({
   };
 
   return (
-    <Animated.View style={[StyleSheet.absoluteFill, openStyle]}>
+    <View style={StyleSheet.absoluteFill}>
       <Animated.View style={[styles.backdrop, backdropStyle]} />
+      <Animated.View style={[StyleSheet.absoluteFill, openStyle]}>
       <GestureDetector gesture={pan}>
         <Animated.View style={[StyleSheet.absoluteFill, containerStyle]}>
           <FlatList
@@ -395,7 +408,8 @@ export function Viewer({
           )}
         </Animated.View>
       </GestureDetector>
-    </Animated.View>
+      </Animated.View>
+    </View>
   );
 }
 
@@ -533,6 +547,10 @@ const ViewerPage = memo(function ViewerPage({
                   {load.storageFull ? (
                     <Text style={styles.loadingSubtext}>
                       Free up space to load iCloud photos
+                    </Text>
+                  ) : load.offline ? (
+                    <Text style={styles.loadingSubtext}>
+                      You’re offline. Connect to load iCloud photos
                     </Text>
                   ) : null}
                   <Pressable onPress={load.retry} hitSlop={12} style={styles.retryButton}>

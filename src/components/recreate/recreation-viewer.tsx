@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   FlatList,
@@ -27,7 +27,7 @@ import XIcon from '@/assets/icons/x.svg';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { frameTop, PhotoFrame } from '@/components/feed/photo-frame';
 import { useCompositeCapture } from '@/components/recreate/use-composite-capture';
-import { DisplayFont, FrameMargin, Ink, Paper, PhotoRatio } from '@/constants/theme';
+import { DisplayFont, FrameMargin, Ink, Paper, PhotoPlaceholder, PhotoRatio } from '@/constants/theme';
 import { getAssetRatio, setAssetRatio } from '@/lib/asset-ratio-cache';
 import {
   filmCenterOffset,
@@ -101,16 +101,35 @@ export function RecreationViewer({
   const pagerRef = useRef<FlatList<Recreation>>(null);
   const filmRef = useRef<FlatList<Recreation>>(null);
 
-  // Open fade/scale + drag-down dismiss, mirroring the Near Me viewer.
+  // Open fade/scale + drag-down dismiss, mirroring the Near Me viewer — but
+  // the open fade waits for the FIRST PAGE'S PHOTO to decode, so the whole
+  // viewer (chrome + frame + filmstrip) arrives as one composed unit. Fading
+  // in on mount showed a blank gray page with floating pills for the decode
+  // beat, then the photo popping in after (visible in the 2026-07-22 screen
+  // recording). The grid simply stays visible for that beat instead.
   const translateY = useSharedValue(0);
   const openProgress = useSharedValue(0);
+  const [firstPagePainted, setFirstPagePainted] = useState(false);
+  const handleFirstPaint = useCallback(() => setFirstPagePainted(true), []);
   useEffect(() => {
+    if (!firstPagePainted) return;
     openProgress.value = withTiming(1, { duration: 240, easing: Easing.out(Easing.cubic) });
-  }, [openProgress]);
+  }, [firstPagePainted, openProgress]);
+  // Safety: a slow/failed first decode must never hold the viewer shut — after
+  // a beat, open anyway onto the per-page placeholder.
+  useEffect(() => {
+    if (firstPagePainted) return;
+    const t = setTimeout(() => setFirstPagePainted(true), 400);
+    return () => clearTimeout(t);
+  }, [firstPagePainted]);
+  // Close animations use ease-OUT on purpose: the fade starts the instant the
+  // gesture lands, so the tap feels acknowledged. Ease-in held the viewer at
+  // near-full opacity for most of the window, then dumped it — read as a lag
+  // then a pop.
   const handleClose = () => {
     openProgress.value = withTiming(
       0,
-      { duration: 200, easing: Easing.in(Easing.cubic) },
+      { duration: 160, easing: Easing.out(Easing.quad) },
       (finished) => {
         'worklet';
         if (finished) scheduleOnRN(onClose);
@@ -127,13 +146,30 @@ export function RecreationViewer({
     })
     .onEnd((e) => {
       if (e.translationY > DISMISS_THRESHOLD) {
-        scheduleOnRN(onClose);
+        // Carry the drag through: slide the rest of the way off while fading,
+        // then unmount — a bare onClose here snapped from mid-drag to the grid.
+        translateY.value = withTiming(height, { duration: 160, easing: Easing.out(Easing.quad) });
+        openProgress.value = withTiming(0, { duration: 160, easing: Easing.out(Easing.quad) }, () => {
+          'worklet';
+          scheduleOnRN(onClose);
+        });
       } else {
         translateY.value = withSpring(0);
       }
     });
   const containerStyle = useAnimatedStyle(() => ({
     transform: [{ translateY: translateY.value }],
+  }));
+  // Two layers, one progress: the Paper backdrop reaches full opacity by the
+  // HALFWAY point of the fade, the content fades/scales over it. Fading the
+  // whole viewer as one sheet double-exposed the photo and chrome onto the
+  // grid behind it (the mushy ghosting in the 2026-07-22 recordings). The
+  // backdrop also thins as a drag-dismiss pulls the content down (same feel
+  // as the Near Me viewer).
+  const backdropStyle = useAnimatedStyle(() => ({
+    opacity:
+      Math.min(1, openProgress.value * 2) *
+      Math.max(0.5, 1 - translateY.value / height),
   }));
   const openStyle = useAnimatedStyle(() => ({
     opacity: openProgress.value,
@@ -189,6 +225,11 @@ export function RecreationViewer({
     }
   };
 
+  // Remove the record FIRST, then animate out: the grid behind the fade
+  // updates immediately, so the reveal never shows a tile that's about to
+  // vanish. This survives the removal because this viewer froze its copy of
+  // the list on open, and the gallery keys the mount on viewingId (not on the
+  // record still existing) — only onClose, after the fade, unmounts it.
   const handleDelete = () => {
     Alert.alert(
       'Delete recreation?',
@@ -200,7 +241,14 @@ export function RecreationViewer({
           style: 'destructive',
           onPress: () => {
             void removeRecreation(current.id);
-            onClose();
+            openProgress.value = withTiming(
+              0,
+              { duration: 160, easing: Easing.out(Easing.quad) },
+              () => {
+                'worklet';
+                scheduleOnRN(onClose);
+              }
+            );
           },
         },
       ]
@@ -208,7 +256,9 @@ export function RecreationViewer({
   };
 
   return (
-    <Animated.View style={[styles.root, openStyle]}>
+    <View style={styles.root}>
+      <Animated.View style={[styles.backdrop, backdropStyle]} />
+      <Animated.View style={[StyleSheet.absoluteFill, openStyle]}>
       <GestureDetector gesture={pan}>
         <Animated.View style={[StyleSheet.absoluteFill, containerStyle]}>
           <FlatList
@@ -255,6 +305,8 @@ export function RecreationViewer({
                       ? () => setPrimary((p) => (p === 'now' ? 'then' : 'now'))
                       : undefined
                   }
+                  // Only the page the viewer opened on gates the open fade.
+                  onPainted={i === startIndex ? handleFirstPaint : undefined}
                 />
               </ErrorBoundary>
             )}
@@ -320,7 +372,9 @@ export function RecreationViewer({
                     contentFit="cover"
                     cachePolicy="memory-disk"
                     priority="low"
-                    transition={0}
+                    // Thumbs decode staggered; a short dissolve keeps the strip
+                    // from reading as tiles popping in one at a time.
+                    transition={120}
                   />
                 </Pressable>
               )}
@@ -331,7 +385,8 @@ export function RecreationViewer({
           {captureElement}
         </Animated.View>
       </GestureDetector>
-    </Animated.View>
+      </Animated.View>
+    </View>
   );
 }
 
@@ -347,12 +402,16 @@ const RecreationPage = function RecreationPage({
   height,
   primary,
   onSwap,
+  onPainted,
 }: {
   rec: Recreation;
   width: number;
   height: number;
   primary: ThenNowPrimary;
   onSwap?: () => void;
+  // Fires once the page has something real to show (photo decoded, or the
+  // missing-original panel). The viewer gates its open fade on this.
+  onPainted?: () => void;
 }) {
   const insets = useSafeAreaInsets();
   const nowUri = recreationUri(rec);
@@ -379,6 +438,20 @@ const RecreationPage = function RecreationPage({
   const insetUri = bigIsThen ? nowUri : thenUri;
   const insetIsThen = !bigIsThen;
 
+  // Reveal the framed block (chrome + photo + caption) as ONE dissolve once
+  // the big image has decoded (or degraded to the missing panel). The old
+  // two-stage arrival — gray box, then chrome+photo popping — read as jank on
+  // open. One-way: `painted` is sticky, so a primary swap never re-hides.
+  const revealed = useSharedValue(0);
+  const shouldReveal = painted || (bigIsThen && thenFailed);
+  useEffect(() => {
+    if (shouldReveal) {
+      revealed.value = withTiming(1, { duration: 180, easing: Easing.out(Easing.quad) });
+      onPainted?.();
+    }
+  }, [shouldReveal, revealed, onPainted]);
+  const revealStyle = useAnimatedStyle(() => ({ opacity: revealed.value }));
+
   // Retakes are captured in the app's 3:4 frame, so the page uses the fixed
   // PhotoRatio box (like the feed card), centered in the band between the
   // header and the overlaid bottom chrome — same banding as the Near Me page.
@@ -399,6 +472,7 @@ const RecreationPage = function RecreationPage({
 
   return (
     <View style={{ width, height, backgroundColor: Paper }}>
+      <Animated.View style={[StyleSheet.absoluteFill, revealStyle]}>
       <PhotoFrame
         screenW={width}
         top={top}
@@ -418,6 +492,9 @@ const RecreationPage = function RecreationPage({
             style={StyleSheet.absoluteFill}
             contentFit={bigIsThen && thenLandscape ? 'contain' : 'cover'}
             cachePolicy="memory-disk"
+            // Kept alongside the reveal wrapper: the wrapper handles first
+            // arrival, this dissolves the big-image swap when the user taps
+            // the inset (painted is sticky, so the wrapper won't re-fade).
             transition={120}
             onLoad={(e) => {
               setPainted(true);
@@ -486,12 +563,22 @@ const RecreationPage = function RecreationPage({
         </Text>
         {distance ? <Text style={styles.place}>{distance}</Text> : null}
       </View>
+      </Animated.View>
     </View>
   );
 };
 
 const styles = StyleSheet.create({
   root: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  // Separate layer so the open fade can bring the canvas to opaque ahead of
+  // the content (see backdropStyle).
+  backdrop: {
     position: 'absolute',
     top: 0,
     left: 0,
@@ -580,7 +667,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     borderWidth: 2,
     borderColor: 'transparent',
-    backgroundColor: '#E9E9E9',
+    backgroundColor: PhotoPlaceholder,
   },
   thumbWrapActive: {
     borderColor: Ink,
@@ -594,7 +681,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     borderColor: Paper,
     overflow: 'hidden',
-    backgroundColor: '#E9E9E9',
+    backgroundColor: PhotoPlaceholder,
   },
   insetTag: {
     position: 'absolute',
