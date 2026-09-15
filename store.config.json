@@ -1,0 +1,55 @@
+{
+  "configVersion": 0,
+  "apple": {
+    "copyright": "2026 Cole Uyematsu",
+    "categories": ["PHOTO_AND_VIDEO"],
+    "info": {
+      "en-US": {
+        "title": "PastPic",
+        "subtitle": "Memories where you took them",
+        "promoText": "Walk past a place you photographed years ago and PastPic quietly taps you on the shoulder. Your library already holds the memories. PastPic knows where they live.",
+        "description": "PastPic turns your camera roll into a map of your past. It notices when you're standing somewhere you took photos long ago and resurfaces them, right there, right then.\n\nHOW IT WORKS\n\nPastPic reads the location and date already saved in your photos and quietly keeps track of the places that matter. When you walk past a spot where you took photos more than a few months ago, you get a gentle notification. Tap it and you're looking at that day again, standing in the same place.\n\nIt learns your routine, too. Home, work, and the gym go quiet on their own. The notifications you get are the ones worth getting: the restaurant from a birthday two years ago, the park from a day you'd half forgotten.\n\nMEMORIES\n\nA clean, gallery-style feed that shuffles through your located photos one frame at a time. No grid of ten thousand thumbnails. One photo, its place, its date.\n\nNEAR ME\n\nOpen the app anywhere and see every photo and video you've ever taken nearby. Standing in your old neighborhood? There's your life from that block.\n\nRETAKES\n\nLine up an old photo as a ghost over the live camera and retake it from the same spot. Save the then-and-now pair, or share it.\n\nSHARING\n\nShare any memory as the original file or as a framed card sized for stories. Then-and-now retakes share as a clean composite.\n\nPRIVATE BY DESIGN\n\nEverything happens on your phone. Your photos and your location are processed entirely on-device and never leave your device. No account, no sign-up, no cloud, no ads, no tracking. The only thing PastPic ever sends anywhere is an anonymous crash report if the app itself fails.\n\nPastPic works best with a photo library that has location data and a bit of history in it. The more places you've photographed, the more the world starts handing your memories back.",
+        "keywords": [
+          "memories",
+          "nostalgia",
+          "throwback",
+          "flashback",
+          "rewind",
+          "photo map",
+          "nearby",
+          "then and now",
+          "geofence",
+          "photo diary"
+        ],
+        "privacyPolicyUrl": "https://coleuyematsu.github.io/pastpic/privacy/",
+        "supportUrl": "https://coleuyematsu.github.io/pastpic/"
+      }
+    },
+    "advisory": {
+      "alcoholTobaccoOrDrugUseOrReferences": "NONE",
+      "contests": "NONE",
+      "gambling": false,
+      "gamblingSimulated": "NONE",
+      "horrorOrFearThemes": "NONE",
+      "matureOrSuggestiveThemes": "NONE",
+      "medicalOrTreatmentInformation": "NONE",
+      "profanityOrCrudeHumor": "NONE",
+      "sexualContentGraphicAndNudity": "NONE",
+      "sexualContentOrNudity": "NONE",
+      "unrestrictedWebAccess": false,
+      "violenceCartoonOrFantasy": "NONE",
+      "violenceRealistic": "NONE",
+      "violenceRealisticProlongedGraphicOrSadistic": "NONE",
+      "seventeenPlus": false
+    },
+    "release": {
+      "automaticRelease": false
+    },
+    "review": {
+      "firstName": "Cole",
+      "lastName": "Uyematsu",
+      "email": "cjuyematsu@gmail.com",
+      "notes": "PastPic surfaces old photo memories by place. It reads the GPS and date metadata already stored in the user's photo library, entirely on-device, and (1) notifies the user when they physically return to a place where they took photos more than ~90 days ago, (2) shows a \"Near Me\" grid of photos taken around the current location, and (3) lets the user re-take an old photo from the same spot with a ghost overlay.\n\nIMPORTANT FOR TESTING: the core experience depends on the device's photo library containing photos that are months to years old and have GPS data, taken at places near the reviewer's physical location. A fresh test device with an empty or recent library will show the app's empty states instead. The attached video demonstrates the full flow on a real library: the geofence notification arriving, tapping it into the photo cluster, the Near Me grid, and a retake.\n\nTo see the app populated: any library with geotagged photos will fill the MEMORIES feed immediately, and the NEAR ME tab shows photos taken within a few hundred meters of the current location. The location-triggered notification additionally requires standing near a place with photos older than ~90 days that is not a routine location, so it is best evaluated via the attached video.\n\nBACKGROUND LOCATION: the app requests \"Always\" location only when the user enables memory notifications (never at first launch), and uses it solely to run OS geofences around photo-cluster locations so a notification can fire when the user arrives. There is no location logging, no tracking, and no server: all location and photo processing happens on-device and no user data leaves the device. The app has no account system and no sign-in. The only network traffic the app generates is an anonymous crash report (stack trace and device model, via Sentry) if the app crashes."
+    }
+  }
+}
