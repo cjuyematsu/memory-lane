@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   Modal,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -15,13 +16,14 @@ import { type Asset } from 'expo-media-library';
 import { ShareCard } from '@/components/share/share-card';
 import { ThenNowCard } from '@/components/share/then-now-card';
 import { DisplayFont, Ink, Paper } from '@/constants/theme';
+import { isDiskSpaceCritical } from '@/lib/disk-space';
 import {
   closeShare,
   prepareRawShare,
   RAW_SHARE_TIMEOUT_MS,
+  rawShareFailureMessage,
   shareFile,
   shareOptionsFor,
-  ShareTimeoutError,
   thenNowShareOptions,
   useShareTarget,
   withTimeout,
@@ -75,11 +77,10 @@ export function ShareHost() {
         await shareFile(uri, mimeType);
         closeShare();
       } catch (e) {
-        fail(
-          e instanceof ShareTimeoutError
-            ? 'Couldn’t download this from iCloud. Check your connection and try again.'
-            : 'This item could not be prepared for sharing.'
-        );
+        // Disk state is snapshotted at the moment of failure (same as the
+        // viewers' storageFull): on a critically full phone the iCloud download
+        // is what failed, and "free up space" is the fix, not the network.
+        fail(rawShareFailureMessage(e, isDiskSpaceCritical(), Platform.OS === 'ios'));
       }
     },
     [fail]

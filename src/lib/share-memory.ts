@@ -272,6 +272,26 @@ export class ShareTimeoutError extends Error {
   }
 }
 
+// Pure (unit tested): the failure message for a raw share. A critically full
+// disk wins over everything, including the timeout: below ~1GB free, iOS fails
+// iCloud downloads whether or not the network is fine, and freeing space is the
+// actionable fix — same precedence as use-icloud-image-load's storageFull.
+// `cloudBacked` is false on Android (local media, no iCloud): there neither the
+// storage nor the network explanation applies, so every failure is generic.
+export function rawShareFailureMessage(
+  error: unknown,
+  storageCritical: boolean,
+  cloudBacked: boolean = true
+): string {
+  if (!cloudBacked) return 'This item could not be prepared for sharing.';
+  if (storageCritical) {
+    return 'iPhone storage is full. Free up space to download this from iCloud, then try again.';
+  }
+  return error instanceof ShareTimeoutError
+    ? 'Couldn’t download this from iCloud. Check your connection and try again.'
+    : 'This item could not be prepared for sharing.';
+}
+
 // Generous: resolving a raw original may first have to download it from iCloud
 // (offloaded by "Optimize iPhone Storage"), which is slower than a local read.
 export const RAW_SHARE_TIMEOUT_MS = 30000;

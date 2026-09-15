@@ -4,6 +4,7 @@ import {
   MIN_FRAME_RATIO,
   mimeTypeForFilename,
   RAW_SHARE_TIMEOUT_MS,
+  rawShareFailureMessage,
   SHARE_LAYOUT,
   STORY_CANVAS,
   ShareTimeoutError,
@@ -188,5 +189,39 @@ describe('withTimeout', () => {
     await expect(p).resolves.toBe('fast');
     // Advancing past the deadline must not produce an unhandled rejection.
     jest.advanceTimersByTime(2000);
+  });
+});
+
+describe('rawShareFailureMessage', () => {
+  it('blames the network on a timeout with disk headroom', () => {
+    expect(rawShareFailureMessage(new ShareTimeoutError(), false)).toBe(
+      'Couldn’t download this from iCloud. Check your connection and try again.'
+    );
+  });
+
+  it('falls back to the generic message for any other error', () => {
+    for (const e of [new Error('boom'), 'boom', null, undefined]) {
+      expect(rawShareFailureMessage(e, false)).toBe(
+        'This item could not be prepared for sharing.'
+      );
+    }
+  });
+
+  it('a critically full disk wins over everything, including the timeout', () => {
+    // Below ~1GB free, iOS fails iCloud downloads regardless of the network —
+    // a "check your connection" alert would send the user chasing the wrong fix.
+    const storage =
+      'iPhone storage is full. Free up space to download this from iCloud, then try again.';
+    expect(rawShareFailureMessage(new ShareTimeoutError(), true)).toBe(storage);
+    expect(rawShareFailureMessage(new Error('boom'), true)).toBe(storage);
+  });
+
+  it('is always generic when the library is not cloud-backed (Android)', () => {
+    // No iCloud on Android: "check your connection" / "free up space to
+    // download from iCloud" would both be wrong there.
+    const generic = 'This item could not be prepared for sharing.';
+    expect(rawShareFailureMessage(new ShareTimeoutError(), false, false)).toBe(generic);
+    expect(rawShareFailureMessage(new ShareTimeoutError(), true, false)).toBe(generic);
+    expect(rawShareFailureMessage(new Error('boom'), true, false)).toBe(generic);
   });
 });
