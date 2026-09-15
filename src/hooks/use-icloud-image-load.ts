@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
 import type { ImageLoadEventData, ImageProgressEventData } from 'expo-image';
 
@@ -125,6 +125,41 @@ export function deriveFlags(state: LoadState, assetId: string): LoadFlags {
   };
 }
 
+// Only iOS media can be iCloud-resident. On Android every asset is a local
+// file: there is no download to wait on, no network to be "offline" for, and no
+// disk headroom an iCloud fetch needs — so the offline fail-fast and the
+// iCloud/iPhone recovery copy must never apply there. (Before this gate, every
+// Near Me tile that took >2.5s to decode at launch on a home Wi‑Fi the OS hadn't
+// validated — captive portal, flaky uplink — was dropped as "offline".)
+export const CLOUD_BACKED = Platform.OS === 'ios';
+
+// Pure (unit tested): what to do when the hint deadline passes with no final
+// image. Cloud-backed: fail straight to unreachable when offline (an iCloud-only
+// photo can't arrive), otherwise show the "Accessing…" hint. Local media: nothing
+// — the stall deadline is the only failure path, and it is never network-keyed.
+export function hintActionFor(
+  cloudBacked: boolean,
+  online: boolean
+): 'accessing' | 'unreachable' | null {
+  if (!cloudBacked) return null;
+  return online ? 'accessing' : 'unreachable';
+}
+
+// Pure (unit tested): the explanation flags shown beside an unreachable image.
+// Both are iCloud explanations, so they are forced off for local media.
+export function unreachableFlags({
+  cloudBacked,
+  diskCritical,
+  offline,
+}: {
+  cloudBacked: boolean;
+  diskCritical: boolean;
+  offline: boolean;
+}): { storageFull: boolean; offline: boolean } {
+  if (!cloudBacked) return { storageFull: false, offline: false };
+  return { storageFull: diskCritical, offline };
+}
+
 export type IcloudImageLoad = LoadFlags & {
   reloadNonce: number;
   // Whole percent (0–100) of an in-flight fetch for THIS asset, or null when
@@ -177,9 +212,14 @@ export function useIcloudImageLoad(
   const [storageFull, setStorageFull] = useState(false);
   const [offline, setOffline] = useState(false);
   const markUnreachable = useCallback((id: string, knownOffline?: boolean) => {
-    setStorageFull(isDiskSpaceCritical());
-    if (knownOffline !== undefined) {
-      setOffline(knownOffline);
+    const flags = unreachableFlags({
+      cloudBacked: CLOUD_BACKED,
+      diskCritical: isDiskSpaceCritical(),
+      offline: knownOffline ?? false,
+    });
+    setStorageFull(flags.storageFull);
+    if (!CLOUD_BACKED || knownOffline !== undefined) {
+      setOffline(flags.offline);
     } else {
       // Callers that didn't just probe (the stall deadline, onError) resolve it
       // here; the flag lands a beat after `unreachable`, which is fine — it only
@@ -212,15 +252,17 @@ export function useIcloudImageLoad(
   // Past the hint mark and the FINAL image still hasn't landed: fail straight to
   // unreachable if the phone is offline (no point waiting out the deadline),
   // otherwise surface "Accessing from iCloud…" so the wait reads as working.
-  // Re-armed by reloadNonce on retry and by fgEpoch on foreground.
+  // Re-armed by reloadNonce on retry and by fgEpoch on foreground. Local-only
+  // media (Android) skips this entirely — see hintActionFor.
   useEffect(() => {
-    if (!enabled || imageReady) return;
+    if (!enabled || imageReady || !CLOUD_BACKED) return;
     let cancelled = false;
     const t = setTimeout(async () => {
       const online = await isOnline();
       if (cancelled) return;
-      if (online) dispatch({ type: 'accessing', id: assetId });
-      else markUnreachable(assetId, true);
+      const action = hintActionFor(CLOUD_BACKED, online);
+      if (action === 'accessing') dispatch({ type: 'accessing', id: assetId });
+      else if (action === 'unreachable') markUnreachable(assetId, true);
     }, ICLOUD_ACCESS_HINT_MS);
     return () => {
       cancelled = true;

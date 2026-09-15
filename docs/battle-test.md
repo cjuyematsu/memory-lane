@@ -88,3 +88,20 @@ testable at a desk — the gates it passes are the real ones.
 |---|---|---|
 | 34 | Build the store candidate **without** `EXPO_PUBLIC_DEMO=1`, long-press the Settings privacy note | Nothing happens: no Demo panel, no dev trigger buttons, and a leftover `demo-mode.json` on disk is ignored (position reads go to real GPS) |
 
+## Android (physical device, Release)
+
+Regenerate the native project first: `npx expo prebuild --platform android --clean`
+(the on-disk `android/` is gitignored and goes stale; a stale one still built
+`allowBackup="true"`). Then `npx expo run:android --variant release --device`.
+Logs: `adb logcat | grep -i -E "pastpic|ReactNative|AndroidRuntime"`.
+
+| # | Scenario | Expected |
+|---|---|---|
+| 35 | `android/app/src/main/AndroidManifest.xml` after prebuild | `android:allowBackup="false"` |
+| 36 | Airplane mode → cold launch → Near Me grid + Memories feed | Every tile/card decodes; no retry glyphs, no "You're offline" / iCloud copy (local media never fails for being offline) |
+| 37 | Wi‑Fi connected but no internet (hotspot with data off, captive portal) → open Near Me | Same as 36. This was the "photos don't load at home" report |
+| 38 | Cold launch on a large library, watch captions in the feed | Date + place fill in within seconds; a blank caption recovers on its own (failed reads are retried, not cached) |
+| 39 | Near Me after a cold launch that was interrupted mid-index-build | Photos located later still appear (a thrown/timed-out locate is retried on the next sync, not recorded as no-GPS) |
+| 40 | Share a photo: raw, then framed. Share a video: raw | Share sheet opens with a preview each time; a failure alert reads generically (no iPhone/iCloud wording) |
+| 41 | Retake: capture, Save (both), Share | Capture is fast, composite lands in the gallery, share sheet opens |
+| 42 | Settings dev row (dev build) → Send test notification → background | Arrives on the "Memory notifications" channel; tap opens the cluster |

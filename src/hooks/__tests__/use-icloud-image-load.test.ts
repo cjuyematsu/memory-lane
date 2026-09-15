@@ -1,7 +1,9 @@
 import {
   deriveFlags,
+  hintActionFor,
   initialLoadState,
   loadReducer,
+  unreachableFlags,
   type LoadState,
 } from '@/hooks/use-icloud-image-load';
 
@@ -231,5 +233,41 @@ describe('loadReducer', () => {
     s = loadReducer(s, { type: 'preview', id: A });
     s = loadReducer(s, { type: 'loaded', id: A });
     expect(deriveFlags(s, A)).toMatchObject({ imageReady: true, showing: true });
+  });
+});
+
+// The Android "photos don't load at home" mechanism: every grid tile/feed card
+// ran the iCloud machine, and past the 2.5s hint mark an "offline" probe (on
+// Android: the OS network-VALIDATED bit, false on an unvalidated home Wi‑Fi)
+// dropped any not-yet-decoded local photo as unreachable.
+describe('hintActionFor', () => {
+  it('cloud-backed (iOS): accessing when online, unreachable when offline', () => {
+    expect(hintActionFor(true, true)).toBe('accessing');
+    expect(hintActionFor(true, false)).toBe('unreachable');
+  });
+
+  it('local media (Android): never acts, online or not', () => {
+    expect(hintActionFor(false, true)).toBeNull();
+    expect(hintActionFor(false, false)).toBeNull();
+  });
+});
+
+describe('unreachableFlags', () => {
+  it('cloud-backed passes the disk and network state through', () => {
+    expect(unreachableFlags({ cloudBacked: true, diskCritical: true, offline: false })).toEqual({
+      storageFull: true,
+      offline: false,
+    });
+    expect(unreachableFlags({ cloudBacked: true, diskCritical: false, offline: true })).toEqual({
+      storageFull: false,
+      offline: true,
+    });
+  });
+
+  it('local media never shows the iCloud/iPhone explanations', () => {
+    expect(unreachableFlags({ cloudBacked: false, diskCritical: true, offline: true })).toEqual({
+      storageFull: false,
+      offline: false,
+    });
   });
 });

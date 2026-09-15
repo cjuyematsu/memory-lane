@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
   Linking,
-  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -264,9 +263,9 @@ export function Feed({
   const splash = useMemo<{ uri: string } | null>(() => {
     if (rememberLastPosition) return null;
     if (!startAssetId) return null;
-    if (Platform.OS === 'ios') return { uri: startAssetId };
-    const cachedMeta = getCachedMetadata(startAssetId);
-    return cachedMeta?.uri ? { uri: cachedMeta.uri } : null;
+    // asset.id on both platforms (ph:// / content://): the Android file:// path
+    // from getInfo() is often unreadable under scoped storage and rendered blank.
+    return { uri: startAssetId };
   }, [rememberLastPosition, startAssetId]);
 
   const releaseTransition = useCallback(() => {

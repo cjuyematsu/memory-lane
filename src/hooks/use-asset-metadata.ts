@@ -294,32 +294,52 @@ export async function hydrateAsset(asset: Asset): Promise<AssetMetadata> {
         return meta;
       }
 
-      const [info, mediaType, locationFromCache] = await Promise.all([
-        withTimeoutDefault(asset.getInfo().catch(() => null), LOCATE_READ_MS, null),
+      // Android: same {ok} discipline as the iOS branch. Each read resolves
+      // (never rejects — a thrown getInfo() used to leave meta null forever and
+      // the card invisible), but a thrown/timed-out read is tracked as NOT ok so
+      // the best-effort meta below is returned UNCACHED and useAssetMetadata's
+      // backoff re-reads it. Caching the failure (the old `.catch(() => null)`
+      // + unconditional cappedSet) gave session-long blank dates/places on
+      // Android: getLocation() throws while ACCESS_MEDIA_LOCATION is still
+      // landing, and MediaStore reads time out under the launch sweep.
+      type Res<T> = { ok: boolean; v: T };
+      const okRes = <T,>(v: T): Res<T> => ({ ok: true, v });
+      const failRes = <T,>(v: T): Res<T> => ({ ok: false, v });
+      const [infoRes, mediaType, locRes] = await Promise.all([
+        withTimeoutDefault(
+          asset.getInfo().then(okRes, () => failRes(null)),
+          LOCATE_READ_MS,
+          failRes(null)
+        ),
         withTimeoutDefault(
           asset.getMediaType().catch(() => MediaType.UNKNOWN),
           LOCATE_READ_MS,
           MediaType.UNKNOWN
         ),
         locationCache.has(asset.id)
-          ? Promise.resolve(locationCache.get(asset.id) ?? null)
-          : withTimeoutDefault(asset.getLocation().catch(() => null), LOCATE_READ_MS, null),
+          ? Promise.resolve(okRes(locationCache.get(asset.id) ?? null))
+          : withTimeoutDefault(
+              asset.getLocation().then(okRes, () => failRes(null)),
+              LOCATE_READ_MS,
+              failRes(null)
+            ),
       ]);
-      // Resolve with whatever we got rather than rejecting: a thrown getInfo()
-      // used to leave meta null forever (retries exhausted), which kept the
-      // card invisible. Many Android assets also report creationTime 0 (or
-      // null); fall back to modificationTime so the date isn't blank.
+      const info = infoRes.v;
+      // Many Android assets report creationTime 0 (or null); fall back to
+      // modificationTime so the date isn't blank.
       const creationTime = info
         ? firstValidTime(info.creationTime, info.modificationTime)
         : null;
       const meta: AssetMetadata = {
         uri: info?.uri ?? asset.id,
         creationTime,
-        location: locationFromCache,
+        location: locRes.v,
         mediaType,
       };
-      cappedSet(fullCache, asset.id, meta);
-      if (!locationCache.has(asset.id)) cappedSet(locationCache, asset.id, meta.location);
+      if (infoRes.ok && locRes.ok) {
+        cappedSet(fullCache, asset.id, meta);
+        if (!locationCache.has(asset.id)) cappedSet(locationCache, asset.id, meta.location);
+      }
       return meta;
     } finally {
       fullInflight.delete(asset.id);
