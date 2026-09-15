@@ -3,25 +3,27 @@ import { AppState } from 'react-native';
 import * as Location from 'expo-location';
 
 import { withTimeout, withTimeoutDefault } from '@/lib/async-safety';
+import { demoCoords, getLastKnownPosition, getPosition } from '@/lib/demo-mode';
 import { LOCATION_FIX_MS, LOCATION_PERM_MS } from '@/lib/loading-timeouts';
 
 // Fetch a coordinate without hanging: getCurrentPositionAsync has no timeout and
 // can stall indefinitely on a cold GPS. Bound it, and on a stall fall back to
 // the OS's last known position (instant, cached) before giving up.
+//
+// The demo override (lib/demo-mode.ts) short-circuits ahead of all of it — a
+// synthetic fix is instant, which also spares the trailer an 8s cold-GPS wait.
 async function getLocationFix(): Promise<{ latitude: number; longitude: number }> {
+  const demo = demoCoords();
+  if (demo) return demo;
   try {
     const pos = await withTimeout(
-      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+      getPosition({ accuracy: Location.Accuracy.Balanced }),
       LOCATION_FIX_MS,
       'location fix'
     );
     return { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
   } catch (e) {
-    const last = await withTimeoutDefault(
-      Location.getLastKnownPositionAsync(),
-      LOCATION_FIX_MS,
-      null
-    );
+    const last = await withTimeoutDefault(getLastKnownPosition(), LOCATION_FIX_MS, null);
     if (last) return { latitude: last.coords.latitude, longitude: last.coords.longitude };
     throw e;
   }

@@ -77,3 +77,14 @@ these verify the full boot path, not just the parser.
 | 31 | Re-visit the same spot within the cooldown window | Silence (per-cluster cooldown) |
 | 32 | Visit home/work repeatedly for 3+ days | Those spots go quiet (routine-place suppression) |
 | 33 | Foreground arrival at a memory spot | In-app banner with the Near Me count, not an OS notification |
+
+Rows 30-33 are the hard ones to reach on foot. The demo location override
+(`docs/demo-video.md`) lets you stand at any cluster on demand, which makes them
+testable at a desk — the gates it passes are the real ones.
+
+## Store-submission guard
+
+| # | Scenario | Expected |
+|---|---|---|
+| 34 | Build the store candidate **without** `EXPO_PUBLIC_DEMO=1`, long-press the Settings privacy note | Nothing happens: no Demo panel, no dev trigger buttons, and a leftover `demo-mode.json` on disk is ignored (position reads go to real GPS) |
+

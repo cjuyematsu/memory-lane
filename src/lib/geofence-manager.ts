@@ -23,6 +23,7 @@ import {
   isClusterInCooldown,
   markClusterNotified,
 } from '@/lib/cluster-cooldown';
+import { getLastKnownPosition, getPosition } from '@/lib/demo-mode';
 import { showBanner } from '@/lib/foreground-banner';
 import { isInCooldown, markNotified } from '@/lib/notification-cooldown';
 import {
@@ -196,7 +197,9 @@ export async function fireTestNotification(): Promise<boolean> {
 // notification -> tap -> Near Me cluster flow can be exercised on demand
 // without standing at an old-photo location. Fires on a short delay so the app
 // can be backgrounded (foreground presentation is suppressed).
-export async function triggerNearestMemoryHere(): Promise<{
+export async function triggerNearestMemoryHere(
+  delayS: number = TEST_NOTIFICATION_DELAY_S
+): Promise<{
   ok: boolean;
   message: string;
 }> {
@@ -214,9 +217,7 @@ export async function triggerNearestMemoryHere(): Promise<{
   if (!clusters || clusters.length === 0) {
     return { ok: false, message: 'No located photos yet. Open Near Me once to build the index.' };
   }
-  const pos = await Location.getCurrentPositionAsync({
-    accuracy: Location.Accuracy.Balanced,
-  });
+  const pos = await getPosition({ accuracy: Location.Accuracy.Balanced });
   const { latitude, longitude } = pos.coords;
   let nearest = clusters[0];
   let nearestDist = Infinity;
@@ -236,13 +237,13 @@ export async function triggerNearestMemoryHere(): Promise<{
     },
     trigger: {
       type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
-      seconds: TEST_NOTIFICATION_DELAY_S,
+      seconds: delayS,
       channelId: ANDROID_CHANNEL_ID,
     },
   });
   return {
     ok: true,
-    message: `Nearest memory is ~${Math.round(nearestDist)}m away (${nearest.assetIds.length} photo${nearest.assetIds.length === 1 ? '' : 's'}). Background the app now. It arrives in ~${TEST_NOTIFICATION_DELAY_S}s.`,
+    message: `Nearest memory is ~${Math.round(nearestDist)}m away (${nearest.assetIds.length} photo${nearest.assetIds.length === 1 ? '' : 's'}). Background the app now. It arrives in ~${delayS}s.`,
   };
 }
 
@@ -264,9 +265,7 @@ export async function inspectRadiiHere(): Promise<{
     return { ok: false, message: 'No located photos yet. Open Near Me once to build the index.' };
   }
   const { placeCooldownMs } = await loadSettingsFromDisk();
-  const pos = await Location.getCurrentPositionAsync({
-    accuracy: Location.Accuracy.Balanced,
-  });
+  const pos = await getPosition({ accuracy: Location.Accuracy.Balanced });
   const { latitude, longitude } = pos.coords;
   const nearMe = Math.round(relevanceRadiusFor(latitude, longitude, clusters, NEARME_OPTS));
 
@@ -325,8 +324,8 @@ export async function previewForegroundBanner(): Promise<{
   }
   const clusters = getClusters() ?? (await loadClustersFromDisk()) ?? [];
   const pos =
-    (await Location.getLastKnownPositionAsync()) ??
-    (await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }));
+    (await getLastKnownPosition()) ??
+    (await getPosition({ accuracy: Location.Accuracy.Balanced }));
   const { latitude, longitude } = pos.coords;
   const radiusM = relevanceRadiusFor(latitude, longitude, clusters, NEARME_OPTS);
   const count = nearbyCount(index, { latitude, longitude }, radiusM);
@@ -363,10 +362,8 @@ async function reanchorFromBackground(): Promise<void> {
   if (!clusters || clusters.length === 0) return;
   // An exit just fired, so the OS has a fresh fix; fall back to requesting one.
   const pos =
-    (await Location.getLastKnownPositionAsync()) ??
-    (await Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.Balanced,
-    }));
+    (await getLastKnownPosition()) ??
+    (await getPosition({ accuracy: Location.Accuracy.Balanced }));
   await registerGeofencesAt(pos.coords.latitude, pos.coords.longitude, clusters);
 }
 

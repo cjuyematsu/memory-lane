@@ -33,6 +33,7 @@ import { Paper } from '@/constants/theme';
 import { useOnboardingStatus } from '@/hooks/use-onboarding-status';
 import { hydrateAssetRatios } from '@/lib/asset-ratio-cache';
 import { initCrashReporting, logBoundaryError } from '@/lib/crash-log';
+import { warmDemoMode } from '@/lib/demo-mode';
 import { configureImageCache, installMemoryCacheReaper } from '@/lib/image-cache';
 import { FONT_LOAD_MS } from '@/lib/loading-timeouts';
 import { initSentry, wrapRoot } from '@/lib/sentry';
@@ -54,6 +55,10 @@ configureImageCache();
 // right contain/cover fit from the very first render of a launch (fire-and-
 // forget; anything not hydrated in time self-corrects via its own onLoad).
 hydrateAssetRatios();
+// Prime the demo location override (no-op unless EXPO_PUBLIC_DEMO=1 at build
+// time) so the first position read of a cold launch already honors it — the
+// launch-video hero shot cold-starts the app by tapping the notification.
+warmDemoMode();
 
 // Hold the native splash (the Polaroid, see app.json) until React paints, then
 // hand it off to the in-app polaroid loader below — no auto-hide into a white

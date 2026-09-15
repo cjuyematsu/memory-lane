@@ -14,10 +14,12 @@ import {
 } from 'react-native';
 
 import { CooldownPicker } from '@/components/notifications/cooldown-picker';
+import { DemoPanel } from '@/components/notifications/demo-panel';
 import { PermissionsPanel } from '@/components/notifications/permissions-sheet';
 import { DisplayFont, Ink, InkMuted, Paper } from '@/constants/theme';
 import { diagnoseAndroidMetadata } from '@/lib/android-metadata-diagnostic';
 import { getCrashLogText } from '@/lib/crash-log';
+import { DEMO_ENABLED } from '@/lib/demo-mode';
 import {
   fireTestNotification,
   inspectRadiiHere,
@@ -35,11 +37,15 @@ import {
   type PermissionState,
 } from '@/hooks/use-permission-flow';
 
-type View_ = 'main' | 'permissions';
+type View_ = 'main' | 'permissions' | 'demo';
 
-// Demo scaffolding for launch videos: flip to true to show the dev trigger
-// buttons in a Release build. Must be false for any App Store submission.
-const DEMO_BUILD = false;
+// Demo scaffolding for launch videos: the dev trigger buttons below, plus the
+// hidden Demo panel (long-press the privacy note). Gated on the same build-time
+// env switch as the location override — see DEMO_ENABLED in lib/demo-mode.ts.
+// This replaced a source constant that had to be manually flipped back before a
+// store submission; a build made without EXPO_PUBLIC_DEMO=1 simply cannot carry
+// any of it.
+const DEMO_BUILD = DEMO_ENABLED;
 
 export function SettingsSheet({
   visible,
@@ -137,6 +143,8 @@ export function SettingsSheet({
         <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
           {view === 'permissions' ? (
             <PermissionsPanel onBack={() => setView('main')} />
+          ) : view === 'demo' ? (
+            <DemoPanel onBack={() => setView('main')} onClose={onClose} />
           ) : (
             <>
               {/* Hidden diagnostics escape hatch: long-pressing the title
@@ -210,7 +218,13 @@ export function SettingsSheet({
                 <NavRow label="Permissions" first onPress={() => setView('permissions')} />
               </View>
 
-              <Text style={styles.privacyNote}>
+              {/* Long-press opens the launch-video demo panel (location
+                  override + armed trigger). Hidden behind a gesture rather than
+                  a row because this sheet itself is on camera during the shoot,
+                  and inert entirely unless the build carries EXPO_PUBLIC_DEMO=1. */}
+              <Text
+                style={styles.privacyNote}
+                onLongPress={DEMO_BUILD ? () => setView('demo') : undefined}>
                 Everything stays on your phone. Your photos and location never leave your device.
               </Text>
 

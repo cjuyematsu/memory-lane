@@ -37,3 +37,17 @@ export async function readPersisted(name: string): Promise<string | null> {
   }
   return null;
 }
+
+// Delete a persisted store outright. Removes the legacy cache copy too —
+// deleting only the document copy would let the migration path above resurrect
+// the stale cached one on the next read.
+export async function deletePersisted(name: string): Promise<void> {
+  for (const dir of [Paths.document, Paths.cache]) {
+    try {
+      const file = new File(dir, name);
+      if (file.exists) file.delete();
+    } catch {
+      // best-effort; a store that won't delete is not worth throwing over
+    }
+  }
+}

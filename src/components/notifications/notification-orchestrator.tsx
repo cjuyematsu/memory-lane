@@ -13,6 +13,7 @@ import {
 } from '@/hooks/use-notification-settings';
 import { ensureClusters, invalidateClusters } from '@/hooks/use-photo-clusters';
 import { withTimeoutDefault } from '@/lib/async-safety';
+import { getPosition } from '@/lib/demo-mode';
 import { LOCATION_PERM_MS } from '@/lib/loading-timeouts';
 import { shouldDegradeNotifications } from '@/lib/notification-degrade';
 import {
@@ -164,9 +165,7 @@ export function NotificationOrchestrator() {
           return;
         }
         stopForegroundFallback(); // upgraded to Always — geofencing takes over
-        const pos = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        });
+        const pos = await getPosition({ accuracy: Location.Accuracy.Balanced });
         if (cancelled) return;
         const { latitude, longitude } = pos.coords;
         if (!shouldRotateGeofences(latitude, longitude)) return;
