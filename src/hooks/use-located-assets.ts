@@ -240,13 +240,24 @@ function saveToDisk(index: AssetIndex): void {
 export type LocateResult =
   | { kind: 'located'; value: LocatedAsset }
   | { kind: 'unlocatedVideo'; value: UnlocatedVideo }
-  | { kind: 'none' };
+  // A successful read that found no GPS (and no video fallback): a real answer,
+  // recorded as processed so the asset is never re-read.
+  | { kind: 'none' }
+  // The read threw or timed out (cold Photos framework, the launch decode
+  // burst, a MediaStore hiccup): NOT an answer. assembleIndex leaves the id out
+  // of processedIds so the next sync re-attempts it — otherwise one transient
+  // failure would record the photo as "no location" on disk for good, and it
+  // would never reach Near Me, a cluster, or a geofence again.
+  | { kind: 'failed' };
+
+const FAILED: LocateResult = { kind: 'failed' };
 
 async function locate(asset: Asset): Promise<LocateResult> {
   // Bounded so one stuck native read can't stall its whole batch in
   // runLocateSweep — this index feeds the geofence notifications, which must
-  // keep making progress. A timed-out asset is simply skipped (kind: 'none')
-  // and re-attempted on a later sync.
+  // keep making progress. A timed-out or thrown read resolves `failed` and is
+  // re-attempted on a later sync (one bounded read per still-failing asset per
+  // sync; a permanently unreadable asset costs that much, never more).
   return withTimeoutDefault(
     (async (): Promise<LocateResult> => {
       try {
@@ -275,11 +286,11 @@ async function locate(asset: Asset): Promise<LocateResult> {
         }
         return { kind: 'none' };
       } catch {
-        return { kind: 'none' };
+        return FAILED;
       }
     })(),
     LOCATE_READ_MS,
-    { kind: 'none' }
+    FAILED
   );
 }
 
@@ -296,6 +307,9 @@ export function assembleIndex(
   const unlocatedVideos = [...kept.unlocatedVideos];
   const processedIds = [...kept.processedIds];
   results.forEach((r, j) => {
+    // A failed read is not processed: leaving the id out is what makes the
+    // next sync retry it (sync locates exactly the ids not in processedIds).
+    if (r.kind === 'failed') return;
     processedIds.push(processedAssets[j].id);
     if (r.kind === 'located') located.push(r.value);
     else if (r.kind === 'unlocatedVideo') unlocatedVideos.push(r.value);

@@ -50,7 +50,7 @@ Pre-release: run the on-device scenario matrix in `docs/battle-test.md`; corrupt
 ### The shared located-assets index is the spine
 `hooks/use-located-assets.ts` is the single source of truth that everything else derives from. It performs the one expensive operation in the app — a native metadata read (GPS + creation time + media type) per asset — and builds an `AssetIndex` that is:
 - **persisted to disk** (`located-assets.json` in the document directory) and reused across launches,
-- **updated incrementally**: on library change only newly-added assets are located and deleted ones dropped (`sync()`), never a full re-scan,
+- **updated incrementally**: on library change only newly-added assets are located and deleted ones dropped (`sync()`), never a full re-scan. A thrown/timed-out locate resolves `{kind:'failed'}` and is **left out of `processedIds`** so the next sync retries it (a `none` = successfully read, no GPS, is processed); recording failures as no-GPS was silently dropping photos from Near Me/clusters for good,
 - **cached in a module variable** keyed by the asset-array reference, with in-flight dedup.
 
 Two consumers derive cheap in-memory results from it:

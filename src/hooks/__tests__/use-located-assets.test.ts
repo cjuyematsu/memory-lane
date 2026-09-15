@@ -135,6 +135,28 @@ describe('assembleIndex', () => {
     expect(idx.unlocatedVideos.map((v) => v.id)).toEqual(['a2']);
   });
 
+  it('leaves a failed read OUT of processedIds so the next sync retries it', () => {
+    // The bug this guards: a thrown/timed-out locate used to be recorded as
+    // processed-with-no-location, permanently dropping the photo from Near Me,
+    // clusters, and geofences after one transient failure.
+    const assets = ids(4); // a0..a3
+    const results: LocateResult[] = [
+      { kind: 'failed' },
+      { kind: 'located', value: { id: 'a1', lat: 5, lng: 6, creationTime: 1, mediaType: 'photo' as never } },
+      { kind: 'failed' },
+      { kind: 'none' },
+    ];
+    const idx = assembleIndex(kept, assets, results);
+    expect(idx.processedIds).toEqual(['k', 'a1', 'a3']);
+    expect(idx.located.map((l) => l.id)).toEqual(['k', 'a1']);
+    expect(idx.unlocatedVideos).toEqual([]);
+  });
+
+  it('a successful no-GPS read (none) IS processed, so it is never re-read', () => {
+    const idx = assembleIndex(kept, ids(1), [{ kind: 'none' }]);
+    expect(idx.processedIds).toEqual(['k', 'a0']);
+  });
+
   it('does not mutate the kept base (so checkpoints can reuse it)', () => {
     const base: AssetIndex = { located: [], unlocatedVideos: [], processedIds: [] };
     assembleIndex(base, ids(1), [none()]);
@@ -157,6 +179,17 @@ describe('runLocateSweep', () => {
     });
     expect(results).toHaveLength(23);
     expect(seen).toHaveLength(23);
+  });
+
+  it('carries failed results through in order, and a checkpoint built from them skips those ids', async () => {
+    const results = await runLocateSweep(ids(6), {
+      locate: async (a) => (a.id === 'a1' || a.id === 'a4' ? { kind: 'failed' } : none()),
+      pacing: { concurrency: 3, interBatchDelayMs: 0 },
+      checkpointEvery: 1000,
+    });
+    expect(results.map((r) => r.kind)).toEqual(['none', 'failed', 'none', 'none', 'failed', 'none']);
+    const idx = assembleIndex({ located: [], unlocatedVideos: [], processedIds: [] }, ids(6), results);
+    expect(idx.processedIds).toEqual(['a0', 'a2', 'a3', 'a5']);
   });
 
   it('checkpoints on cadence but never on the final batch', async () => {
